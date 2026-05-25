@@ -62,6 +62,14 @@ def test_user_blocks_with_image_and_timestamp():
     crew_lines = _assistant_blocks("Found", "", "Scout")
     assert "## Scout" in crew_lines
 
+    usage_lines = _assistant_blocks(
+        "Reply",
+        "",
+        "",
+        {"input_tokens": 100, "cached_input_tokens": 80, "output_tokens": 12},
+    )
+    assert "Usage: in 100" in "\n".join(usage_lines)
+
 
 def test_conversation_metadata_updated_only():
     md = conversation_to_markdown({

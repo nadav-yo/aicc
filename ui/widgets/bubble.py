@@ -13,6 +13,7 @@ from PyQt6.QtGui import QPixmap, QAction, QGuiApplication
 
 from services.content import content_text, image_blocks
 from services.crew import crew_name_from_metadata
+from services.usage import usage_summary
 from ui.avatars import AVATAR_SIZE, avatar_label, avatar_pixmap
 from ui.theme import (
     palette, chat_font_pt, bubble_label_style, composer_style, edit_bubble_style,
@@ -229,6 +230,7 @@ class MessageBubble(QFrame):
     def __init__(self, content="", is_user=True, typing=False,
                  history_index: int = -1, timestamp: str = "",
                  crew: dict | None = None, can_regenerate: bool = False,
+                 usage: dict | None = None,
                  parent=None):
         super().__init__(parent)
         self._is_user = is_user
@@ -241,6 +243,7 @@ class MessageBubble(QFrame):
         self._can_regenerate = can_regenerate
         self._editing = False
         self._timestamp_lbl = None
+        self._usage_lbl = None
         self._speaker_lbl = None
         self._md_source: str | None = None
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
@@ -318,6 +321,12 @@ class MessageBubble(QFrame):
                 Qt.AlignmentFlag.AlignRight if is_user else Qt.AlignmentFlag.AlignLeft
             )
             self.body.addWidget(self._timestamp_lbl)
+        if not is_user:
+            self._usage_lbl = QLabel("")
+            self._usage_lbl.setStyleSheet(timestamp_style())
+            self._usage_lbl.setAlignment(Qt.AlignmentFlag.AlignLeft)
+            self.body.addWidget(self._usage_lbl)
+            self.set_usage(usage)
 
         if is_user:
             row.addStretch()
@@ -438,6 +447,8 @@ class MessageBubble(QFrame):
         self.edit_input.setStyleSheet(edit_bubble_style(fs))
         if self._timestamp_lbl:
             self._timestamp_lbl.setStyleSheet(timestamp_style())
+        if self._usage_lbl:
+            self._usage_lbl.setStyleSheet(timestamp_style())
         if self._speaker_lbl:
             self._speaker_lbl.setStyleSheet(
                 crew_name_style(self._crew_id, self._crew_color)
@@ -485,3 +496,10 @@ class MessageBubble(QFrame):
 
     def set_regenerable(self, enabled: bool):
         self._can_regenerate = bool(enabled)
+
+    def set_usage(self, usage: dict | None):
+        if not self._usage_lbl:
+            return
+        text = usage_summary(usage)
+        self._usage_lbl.setText(text)
+        self._usage_lbl.setVisible(bool(text))

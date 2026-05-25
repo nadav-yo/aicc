@@ -1157,13 +1157,19 @@ class ChatPanel(QWidget):
             "created_at": now,
             "crew": _crew_history_meta(meta),
         }
+        if isinstance(meta.get("usage"), dict):
+            crew_msg["usage"] = dict(meta["usage"])
         self.history.append(crew_msg)
         idx = len(self.history) - 1
         if bubble is None:
-            bubble = self._add_bubble(text, is_user=False, history_index=idx, timestamp=now, crew=meta)
+            bubble = self._add_bubble(
+                text, is_user=False, history_index=idx, timestamp=now,
+                crew=meta, usage=crew_msg.get("usage"),
+            )
         else:
             bubble._history_index = idx
             self._bubbles[idx] = bubble
+            bubble.set_usage(crew_msg.get("usage"))
             bubble.finalize(text)
         self._add_notice(_crew_notice_text(meta, "left"))
         self._update_context_ui()
@@ -1219,6 +1225,8 @@ class ChatPanel(QWidget):
         assistant_msg = {"role": "assistant", "content": full, "created_at": now}
         if run.crew:
             assistant_msg["crew"] = dict(run.crew)
+        if run.thread.last_usage:
+            assistant_msg["usage"] = dict(run.thread.last_usage)
         run_history = copy.deepcopy(run.history_snapshot)
         run_data = copy.deepcopy(run.data_snapshot)
 
@@ -1247,6 +1255,7 @@ class ChatPanel(QWidget):
         if is_current and bubble:
             bubble._history_index = asst_idx
             self._bubbles[asst_idx] = bubble
+            bubble.set_usage(assistant_msg.get("usage"))
             bubble_idx = self.msg_layout.indexOf(bubble)
             offset = [1]
 
@@ -1535,10 +1544,10 @@ class ChatPanel(QWidget):
 
     def _add_bubble(self, content, is_user: bool, typing: bool = False,
                     history_index: int = -1, timestamp: str = "",
-                    crew: dict | None = None) -> MessageBubble:
+                    crew: dict | None = None, usage: dict | None = None) -> MessageBubble:
         bubble = self._make_bubble(
             content, is_user, typing=typing,
-            history_index=history_index, timestamp=timestamp, crew=crew,
+            history_index=history_index, timestamp=timestamp, crew=crew, usage=usage,
         )
         self.msg_layout.insertWidget(self.msg_layout.count() - 1, bubble)
         if history_index >= 0:
@@ -1548,11 +1557,12 @@ class ChatPanel(QWidget):
 
     def _make_bubble(self, content, is_user: bool, typing: bool = False,
                      history_index: int = -1, timestamp: str = "",
-                     crew: dict | None = None) -> MessageBubble:
+                     crew: dict | None = None, usage: dict | None = None) -> MessageBubble:
         bubble = MessageBubble(
             content, is_user, typing=typing,
             history_index=history_index, timestamp=timestamp, crew=crew,
             can_regenerate=(history_index == _latest_regenerable_assistant_index(self.history)),
+            usage=usage,
         )
         bubble.regenerate_requested.connect(self.regenerate)
         bubble.edit_resend_requested.connect(self._edit_resend)
@@ -1728,6 +1738,7 @@ class ChatPanel(QWidget):
             history_index=history_index,
             timestamp=msg.get("created_at", ""),
             crew=msg.get("crew"),
+            usage=msg.get("usage"),
         )
         insert_at = 1 if at_top and self._older_btn else 0 if at_top else self.msg_layout.count() - 1
         self.msg_layout.insertWidget(insert_at, bubble)

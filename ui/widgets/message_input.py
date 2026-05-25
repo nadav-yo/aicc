@@ -1,4 +1,5 @@
 import re
+from pathlib import Path
 
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTextEdit, QPushButton
 from PyQt6.QtCore import Qt, pyqtSignal
@@ -9,6 +10,34 @@ from services.content import encode_image
 from ui.theme import composer_style, chat_font_pt, palette, ACCENT
 
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
+
+
+def _path_is_image(path: str) -> bool:
+    return Path(path).suffix.lower() in _IMAGE_EXTS
+
+
+def _mime_has_attachments(mime) -> bool:
+    if mime.hasImage():
+        return True
+    if mime.hasUrls():
+        return any(url.toLocalFile() for url in mime.urls())
+    return False
+
+
+def _images_from_mime(mime) -> list[QImage]:
+    images: list[QImage] = []
+    if mime.hasImage():
+        image = mime.imageData()
+        if isinstance(image, QImage) and not image.isNull():
+            images.append(image)
+    if mime.hasUrls():
+        for url in mime.urls():
+            path = url.toLocalFile()
+            if path and _path_is_image(path):
+                image = QImage(path)
+                if not image.isNull():
+                    images.append(image)
+    return images
 
 
 class MessageInput(QTextEdit):
@@ -33,6 +62,7 @@ class MessageInput(QTextEdit):
         self._in_mention_mode = False
         self._mention_start = -1
         self._enter_to_send = False
+        self.setAcceptDrops(True)
         self._apply_style()
         self.textChanged.connect(self._on_text_changed)
 
@@ -182,6 +212,31 @@ class MessageInput(QTextEdit):
                 self.image_pasted.emit(image)
                 return
         super().insertFromMimeData(source)
+
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        if _mime_has_attachments(event.mimeData()):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        if _mime_has_attachments(event.mimeData()):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event: QDropEvent):
+        mime = event.mimeData()
+        images = _images_from_mime(mime)
+        if images:
+            for image in images:
+                self.image_pasted.emit(image)
+            event.acceptProposedAction()
+            return
+        if mime.hasUrls():
+            event.acceptProposedAction()
+            return
+        super().dropEvent(event)
 
 
 class _Thumb(QWidget):
@@ -353,22 +408,14 @@ class ComposerWidget(QWidget):
             self.set_skill(self._active_skill)
 
     def dragEnterEvent(self, event: QDragEnterEvent):
-        if event.mimeData().hasUrls() or event.mimeData().hasImage():
+        if _mime_has_attachments(event.mimeData()):
             event.acceptProposedAction()
 
     def dropEvent(self, event: QDropEvent):
-        mime = event.mimeData()
-        if mime.hasImage():
-            image = mime.imageData()
-            if isinstance(image, QImage):
-                self.strip.add_image(image)
-        for url in mime.urls():
-            path = url.toLocalFile()
-            if path and path.lower().endswith(tuple(_IMAGE_EXTS)):
-                image = QImage(path)
-                if not image.isNull():
-                    self.strip.add_image(image)
-        event.acceptProposedAction()
+        for image in _images_from_mime(event.mimeData()):
+            self.strip.add_image(image)
+        if event.mimeData().hasUrls() or event.mimeData().hasImage():
+            event.acceptProposedAction()
 
 
 def _scaled_for_inline(image: QImage) -> QImage:

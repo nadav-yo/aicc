@@ -25,6 +25,7 @@ from services.content import prepare_for_anthropic, prepare_for_openai
 from services.tool_policy import ConversationToolPolicy, ToolApprovalBus, resolve_path
 from services.tools import tools_anthropic, tools_openai, execute, is_parallel_safe, tool_approval
 from services.tool_registry import HookContext, run_extension_hooks
+from services.usage import merge_usage, normalize_usage
 
 _MAX_PARALLEL = 8
 _CHUNK_EMIT_INTERVAL_SEC = 0.10
@@ -68,6 +69,7 @@ class ChatThread(QThread):
         self._configured_providers = set(configured_providers or set())
         self._chunk_buffer: list[str] = []
         self._last_chunk_emit = 0.0
+        self.last_usage: dict = {}
 
     def cancel(self):
         self._cancel.set()
@@ -170,6 +172,7 @@ class ChatThread(QThread):
             kwargs["base_url"] = cfg.base_url
         client    = anthropic.Anthropic(**kwargs)
         full_text = ""
+        self.last_usage = {}
 
         while True:
             if self._cancel.is_set():
@@ -201,6 +204,10 @@ class ChatThread(QThread):
                 if self._cancel.is_set():
                     break
                 message = stream.get_final_message()
+                self.last_usage = merge_usage(
+                    self.last_usage,
+                    normalize_usage("anthropic", getattr(message, "usage", None)),
+                )
 
             if self._cancel.is_set():
                 full_text += turn_text
@@ -242,6 +249,7 @@ class ChatThread(QThread):
         client    = OpenAI(**kwargs)
         msgs      = [{"role": "system", "content": self.system}] + prepare_for_openai(self.history)
         full_text = ""
+        self.last_usage = {}
 
         while True:
             if self._cancel.is_set():
@@ -261,13 +269,25 @@ class ChatThread(QThread):
             if msgs and msgs[0].get("role") == "system":
                 msgs[0]["content"] = self.system
 
-            with client.chat.completions.create(
-                model=self.model, messages=msgs,
-                tools=self._tools_openai(), stream=True,
-            ) as stream:
+            request = {
+                "model": self.model,
+                "messages": msgs,
+                "tools": self._tools_openai(),
+                "stream": True,
+            }
+            if cfg.provider_id == "openai" and not cfg.base_url:
+                request["stream_options"] = {"include_usage": True}
+            turn_usage = {}
+            with client.chat.completions.create(**request) as stream:
                 for chunk in stream:
                     if self._cancel.is_set():
                         break
+                    turn_usage = merge_usage(
+                        turn_usage,
+                        normalize_usage("openai-compatible", getattr(chunk, "usage", None)),
+                    )
+                    if not getattr(chunk, "choices", None):
+                        continue
                     delta = chunk.choices[0].delta
                     if delta.content:
                         self._emit_chunk(delta.content)
@@ -281,6 +301,7 @@ class ChatThread(QThread):
                         if tc.function.arguments:
                             slot["args"] += tc.function.arguments
                 self._flush_chunk_buffer()
+            self.last_usage = merge_usage(self.last_usage, turn_usage)
 
             if self._cancel.is_set():
                 full_text += turn_text
@@ -516,6 +537,8 @@ class ChatThread(QThread):
             crew._flush_chunk_buffer()
             if self._cancel.is_set():
                 text = text or "[cancelled]"
+            if crew.last_usage:
+                meta["usage"] = dict(crew.last_usage)
             self.crew_done.emit(meta, text)
             return f"{member.name}: {text}"
         except Exception as exc:

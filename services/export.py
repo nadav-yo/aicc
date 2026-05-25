@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import QFileDialog, QWidget
 
 from services.content import content_text
 from services.crew import crew_name_from_metadata
+from services.usage import usage_summary
 
 
 def default_export_name(data: dict) -> str:
@@ -44,7 +45,12 @@ def conversation_to_markdown(data: dict) -> str:
                 continue
             lines.extend(_user_blocks(content, ts))
         elif role == "assistant":
-            lines.extend(_assistant_blocks(content, ts, crew_name_from_metadata(msg.get("crew"))))
+            lines.extend(_assistant_blocks(
+                content,
+                ts,
+                crew_name_from_metadata(msg.get("crew")),
+                msg.get("usage"),
+            ))
 
     return "\n".join(lines).rstrip() + "\n"
 
@@ -106,10 +112,12 @@ def _user_blocks(content, ts: str) -> list[str]:
     return lines
 
 
-def _assistant_blocks(content, ts: str, speaker: str = "") -> list[str]:
+def _assistant_blocks(content, ts: str, speaker: str = "", usage: dict | None = None) -> list[str]:
     lines = [f"## {speaker or 'Agent'}", ""]
     if ts:
         lines.extend([f"*{_fmt_ts(ts)}*", ""])
+    if usage_text := usage_summary(usage):
+        lines.extend([f"*Usage: {usage_text}*", ""])
     text = content if isinstance(content, str) else content_text(content)
     if text:
         lines.append(text)
