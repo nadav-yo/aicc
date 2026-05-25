@@ -3,8 +3,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from services.chat import ChatThread, _serialize_anthropic
-from services.crew import ASK_CREW_TOOL_NAME
+from services.chat import ChatThread, _active_task_preview, _serialize_anthropic
+from services.crew import ASK_CREW_TOOL_NAME, get_crew_member
 from services.tool_policy import ConversationToolPolicy, ToolApprovalBus
 
 
@@ -17,6 +17,22 @@ def test_serialize_anthropic_blocks():
     assert out[0] == {"type": "text", "text": "hello"}
     assert out[1]["type"] == "tool_use"
     assert out[1]["name"] == "read_file"
+
+
+def test_active_task_preview_skips_tool_result_turns():
+    history = [
+        {"role": "user", "content": "summarize docs and compare skills"},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "1"}]},
+        {
+            "role": "user",
+            "synthetic": "tool_results",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "1", "content": "docs"},
+                {"type": "text", "text": "Continue the active user task."},
+            ],
+        },
+    ]
+    assert _active_task_preview(history) == "summarize docs and compare skills"
 
 
 def test_chat_thread_filters_tools(workspace, qapp):
@@ -35,6 +51,7 @@ def test_chat_thread_exposes_ask_crew_tool_by_default(workspace, qapp):
     thread = ChatThread("claude-sonnet-4-6", [], "system", str(workspace))
     names = {t["name"] for t in thread._tools_anthropic()}
     assert ASK_CREW_TOOL_NAME in names
+    assert "search_project_chats" not in names
 
     crew_thread = ChatThread(
         "claude-sonnet-4-6",
@@ -45,6 +62,20 @@ def test_chat_thread_exposes_ask_crew_tool_by_default(workspace, qapp):
     )
     names = {t["name"] for t in crew_thread._tools_anthropic()}
     assert ASK_CREW_TOOL_NAME not in names
+
+
+def test_archivist_gets_project_chat_memory_tool(workspace, qapp):
+    archivist = get_crew_member("archivist")
+    thread = ChatThread(
+        "claude-sonnet-4-6",
+        [],
+        "system",
+        str(workspace),
+        allowed_tools=list(archivist.tools),
+        enable_crew_tool=False,
+    )
+    names = {t["name"] for t in thread._tools_anthropic()}
+    assert "search_project_chats" in names
 
 
 def test_emit_chunk_buffering(qapp, workspace):
@@ -137,6 +168,37 @@ def test_execute_ask_crew_runs_nested_member(workspace, qapp):
     assert done[0][1] == "found evidence"
 
 
+def test_execute_ask_crew_sends_small_context_to_scout(workspace, qapp):
+    history = [{"role": "user", "content": f"old {i}"} for i in range(12)]
+    thread = ChatThread("claude-sonnet-4-6", history, "sys", str(workspace))
+    seen = []
+
+    def fake_loop(nested):
+        seen.append(list(nested.history))
+        return "ok"
+
+    with patch.object(ChatThread, "_loop_anthropic", fake_loop):
+        thread._execute_ask_crew({"member": "scout", "task": "check"})
+
+    assert len(seen[0]) < len(history)
+    assert seen[0][-1]["content"].startswith("Scout, answer this focused crew request")
+
+
+def test_execute_ask_crew_archivist_uses_memory_lookup_without_model(workspace, qapp):
+    thread = ChatThread("claude-sonnet-4-6", [], "sys", str(workspace))
+    tool_calls = []
+    done = []
+    thread.tool_called.connect(lambda name, inputs: tool_calls.append((name, inputs)))
+    thread.crew_done.connect(lambda meta, text: done.append((meta, text)))
+
+    with patch.object(ChatThread, "_loop_anthropic", side_effect=AssertionError("no model")):
+        output = thread._execute_ask_crew({"member": "archivist", "task": "playwright"})
+
+    assert output.startswith("Archivist:")
+    assert tool_calls == [("search_project_chats", {"query": "playwright"})]
+    assert done[0][0]["id"] == "archivist"
+
+
 def test_execute_ask_crew_validates_inputs(workspace, qapp):
     thread = ChatThread("claude-sonnet-4-6", [], "sys", str(workspace))
     assert "Unknown crew" in thread._execute_ask_crew({"member": "nope", "task": "x"})
@@ -153,3 +215,11 @@ def test_execute_ask_crew_respects_disabled_member(workspace, qapp):
     )
     out = thread._execute_ask_crew({"member": "scout", "task": "check"})
     assert "Scout is disabled" in out
+
+
+def test_execute_ask_crew_limits_calls_per_turn(workspace, qapp):
+    thread = ChatThread("claude-sonnet-4-6", [], "sys", str(workspace))
+    with patch.object(ChatThread, "_loop_anthropic", return_value="ok"):
+        assert thread._execute_ask_crew({"member": "scout", "task": "one"}).startswith("Scout:")
+        assert thread._execute_ask_crew({"member": "archivist", "task": "two"}).startswith("Archivist:")
+        assert "limited to two" in thread._execute_ask_crew({"member": "scout", "task": "three"})

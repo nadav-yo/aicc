@@ -69,6 +69,18 @@ class TestValidateToolPaths:
     def test_search_files_default_directory(self, workspace):
         assert validate_tool_paths("search_files", {}, str(workspace)) is None
 
+    def test_list_files_default_directory(self, workspace):
+        assert validate_tool_paths("list_files", {}, str(workspace)) is None
+
+    def test_list_files_outside_directory(self, workspace, tmp_path):
+        err = validate_tool_paths(
+            "list_files",
+            {"directory": str(tmp_path)},
+            str(workspace),
+        )
+        assert err is not None
+        assert "list directory" in err
+
     def test_search_files_outside_directory(self, workspace, tmp_path):
         err = validate_tool_paths(
             "search_files",

@@ -29,6 +29,9 @@ def test_build_system_includes_agents_section(workspace):
     (workspace / "AGENTS.md").write_text("Project rule: be careful.\n", encoding="utf-8")
     text = build_system(str(workspace))
     assert "AGENTS.md" in text
+    assert "Project Instructions" in text
+    assert "Project Memory" not in text
+    assert "Use the following project context silently" in text
     assert "Project rule" in text
     assert "Workspace" in text
 

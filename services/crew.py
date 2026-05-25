@@ -33,7 +33,7 @@ CREW: tuple[CrewMember, ...] = (
         name="Scout",
         title="Research",
         description="Finds repo evidence and reads relevant files before the lead decides.",
-        tools=("read_file", "search_files"),
+        tools=("list_files", "read_file", "search_files"),
         called_when=(
             "The user explicitly mentions @Scout.",
             "The task needs repo facts, APIs, docs, or current project evidence.",
@@ -45,66 +45,19 @@ CREW: tuple[CrewMember, ...] = (
         ),
     ),
     CrewMember(
-        id="critic",
-        name="Critic",
-        title="Risk Review",
-        description="Challenges plans and spots correctness, safety, and maintenance risks.",
-        tools=("read_file", "search_files"),
-        called_when=(
-            "The user explicitly mentions @Critic.",
-            "A plan, architecture change, or nontrivial diff needs a skeptical pass.",
-        ),
-        prompt=(
-            "You are Critic, the crew reviewer. Be concise and specific. Focus on bugs, "
-            "risk, missing tests, unclear assumptions, and smaller safer alternatives. "
-            "Do not edit files."
-        ),
-    ),
-    CrewMember(
-        id="tester",
-        name="Tester",
-        title="Tests",
-        description="Checks behavior and may edit only tests when delegated.",
-        tools=("read_file", "search_files", "edit_file", "bash"),
-        write_roots=("tests",),
-        called_when=(
-            "The user explicitly mentions @Tester.",
-            "A behavior change needs validation or targeted test coverage.",
-        ),
-        prompt=(
-            "You are Tester, the crew validation engineer. You may edit only files under "
-            "tests/. Use code changes there to reproduce or lock behavior, and run focused "
-            "test commands when useful. Do not edit product code."
-        ),
-    ),
-    CrewMember(
-        id="designer",
-        name="Designer",
-        title="UX",
-        description="Reviews product feel, interaction, layout, and copy.",
-        tools=("read_file", "search_files"),
-        called_when=(
-            "The user explicitly mentions @Designer.",
-            "UI, product flow, copy, or visual hierarchy needs a pass.",
-        ),
-        prompt=(
-            "You are Designer, the crew UX reviewer. Focus on interaction quality, visual "
-            "hierarchy, product tone, and concrete UI improvements. Do not edit files."
-        ),
-    ),
-    CrewMember(
         id="archivist",
         name="Archivist",
         title="Memory",
         description="Distills decisions and keeps context tidy.",
-        tools=("read_file", "search_files"),
+        tools=("search_project_chats", "list_files", "read_file", "search_files"),
         called_when=(
             "The user explicitly mentions @Archivist.",
             "A long thread needs decision notes, summaries, or context cleanup.",
         ),
         prompt=(
             "You are Archivist, the crew memory keeper. Summarize durable decisions, "
-            "open threads, and context worth carrying forward. Do not edit files."
+            "open threads, and context worth carrying forward. Use search_project_chats "
+            "when the user asks whether something was discussed before. Do not edit files."
         ),
     ),
 )
@@ -182,11 +135,9 @@ def summoned_members(text: str) -> list[CrewMember]:
 
 def crew_roster_prompt() -> str:
     lines = [
-        "The app has an optional Crew: specialized side agents shown as chat bubbles.",
-        "The user can summon them by name, e.g. @Scout or @Critic.",
-        "The lead assistant remains responsible for synthesis and final decisions.",
-        "When a crew member would materially help, call the ask_crew tool with a focused task.",
-        "Use Scout for evidence, Critic for risks, Tester for validation, Designer for UX, and Archivist for summaries.",
+        "Optional Crew: @Scout and @Archivist.",
+        "Use ask_crew only for a focused second opinion; the lead owns the final answer.",
+        "Crew members do not talk to each other. Usually call 0-2 members.",
         "",
         "Crew roster:",
     ]

@@ -1,5 +1,6 @@
-import subprocess
 from pathlib import Path
+
+from services.git_status import is_git_repo, list_file_changes, run_git
 
 
 def register(registry):
@@ -144,32 +145,19 @@ def chat_context_panel(ctx):
 
 
 def _git_status(cwd):
-    raw = _git_output(cwd, ["git", "status", "--short"])
-    entries = []
-    for line in raw.splitlines():
-        if not line.strip():
-            continue
-        entries.append({
-            "status": line[:2].strip() or "modified",
-            "path": line[3:].strip() if len(line) > 3 else line.strip(),
-        })
-    return entries
+    if not is_git_repo(cwd):
+        return []
+    return [
+        {
+            "status": change.label,
+            "path": change.rel_path.replace("\\", "/"),
+        }
+        for change in list_file_changes(cwd)
+    ]
 
 
 def _git_output(cwd, args):
-    try:
-        result = subprocess.run(
-            args,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-    except Exception:
-        return ""
-    if result.returncode != 0:
-        return ""
-    return result.stdout.strip()
+    return run_git(args, cwd)
 
 
 def _preview_message(message):

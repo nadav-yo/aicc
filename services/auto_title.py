@@ -7,42 +7,46 @@ from PyQt6.QtCore import QThread, pyqtSignal
 from services.content import content_preview
 from services.model_registry import get_model_config, resolve_api_key
 
-# Fast, cheap models to use for title generation; keyed by api type.
 _TITLE_MODELS: dict[str, str] = {
-    "anthropic":         "claude-haiku-4-5-20251001",
+    "anthropic": "claude-haiku-4-5-20251001",
     "openai-compatible": "gpt-5.4-nano",
 }
+_BUILTIN_TITLE_PROVIDERS = {"claude", "openai"}
+_STOPWORDS = {
+    "about", "after", "again", "also", "and", "are", "can", "could", "for",
+    "from", "have", "how", "into", "just", "let", "maybe", "need", "please",
+    "should", "that", "the", "this", "what", "when", "where", "with", "would",
+    "we", "you",
+}
+_BAD_TITLE_PATTERNS = (
+    "awaiting task",
+    "ready to proceed",
+    "provide task",
+    "task instructions",
+)
 
 TITLE_PROMPT = """\
-Write a short conversation title (5–7 words). No quotes, no punctuation at the end.
-Capture the main topic or emotional theme. Reply with the title only.
+Write a short conversation title (5-7 words). No quotes, no punctuation at the end.
+Capture the main topic from the first user message. Reply with the title only.
 
-USER:
-{user}
-
-A:
-{assistant}"""
+FIRST USER MESSAGE:
+{user}"""
 
 
-def generate_title(model: str, user_text: str, assistant_text: str) -> str:
-    cfg         = get_model_config(model)
-    title_model = _TITLE_MODELS.get(cfg.api)
+def generate_title(model: str, user_text: str) -> str:
+    cfg = get_model_config(model)
+    title_model = _title_model_for(model, cfg)
     if not title_model:
         raise ValueError(f"No title model for api type: {cfg.api!r}")
 
-    # Reuse the same provider config (key, base_url) as the conversation model.
     kwargs: dict = {"api_key": resolve_api_key(cfg.api_key_spec)}
     if cfg.base_url:
         kwargs["base_url"] = cfg.base_url
 
-    prompt = TITLE_PROMPT.format(
-        user=content_preview(user_text)[:1500],
-        assistant=content_preview(assistant_text)[:1500],
-    )
-
+    prompt = TITLE_PROMPT.format(user=content_preview(user_text)[:100])
     if cfg.api == "anthropic":
         client = anthropic.Anthropic(**kwargs)
-        resp   = client.messages.create(
+        resp = client.messages.create(
             model=title_model,
             max_tokens=32,
             messages=[{"role": "user", "content": prompt}],
@@ -50,14 +54,15 @@ def generate_title(model: str, user_text: str, assistant_text: str) -> str:
         raw = resp.content[0].text
     else:
         client = OpenAI(**kwargs)
-        resp   = client.chat.completions.create(
+        resp = client.chat.completions.create(
             model=title_model,
             max_tokens=32,
             messages=[{"role": "user", "content": prompt}],
         )
         raw = resp.choices[0].message.content or ""
 
-    return clean_title(raw)
+    title = clean_title(raw)
+    return fallback_title(user_text) if _looks_like_bad_title(title) else title
 
 
 def clean_title(raw: str) -> str:
@@ -69,20 +74,56 @@ def clean_title(raw: str) -> str:
     return t or "Untitled"
 
 
+def fallback_title(user_text: str) -> str:
+    text = content_preview(user_text)
+    text = re.sub(r"@\w+", " ", text)
+    text = re.sub(r"[`*_~#>\[\](){}]", " ", text)
+    words = re.findall(r"[A-Za-z0-9][A-Za-z0-9.+#/-]*", text)
+    picked = [
+        word.strip("-_/")
+        for word in words
+        if len(word.strip("-_/")) >= 2 and word.casefold() not in _STOPWORDS
+    ]
+    picked = picked[:6] or words[:6]
+    if not picked:
+        return "Untitled"
+    return clean_title(" ".join(_title_word(word) for word in picked))
+
+
+def _title_model_for(model: str, cfg) -> str | None:
+    if cfg.api not in _TITLE_MODELS:
+        return None
+    if cfg.provider_id in _BUILTIN_TITLE_PROVIDERS:
+        return _TITLE_MODELS.get(cfg.api)
+    return model
+
+
+def _looks_like_bad_title(title: str) -> bool:
+    lowered = title.casefold()
+    return any(pattern in lowered for pattern in _BAD_TITLE_PATTERNS)
+
+
+def _title_word(word: str) -> str:
+    if any(ch.isdigit() for ch in word):
+        return word.upper()
+    if any(ch.isupper() for ch in word[1:]):
+        return word
+    return word[:1].upper() + word[1:].lower()
+
+
 class TitleThread(QThread):
     done  = pyqtSignal(str, str)   # conv_id, title
     error = pyqtSignal(str)
 
-    def __init__(self, conv_id: str, model: str, user_text: str, assistant_text: str):
+    def __init__(self, conv_id: str, model: str, user_text: str):
         super().__init__()
         self.conv_id        = conv_id
         self.model          = model
         self.user_text      = user_text
-        self.assistant_text = assistant_text
 
     def run(self):
         try:
-            title = generate_title(self.model, self.user_text, self.assistant_text)
-            self.done.emit(self.conv_id, title)
-        except Exception as exc:
-            self.error.emit(str(exc))
+            title = generate_title(self.model, self.user_text)
+        except Exception:
+            title = fallback_title(self.user_text)
+        self.done.emit(self.conv_id, title)

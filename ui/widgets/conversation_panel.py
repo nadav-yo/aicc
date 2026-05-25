@@ -5,8 +5,8 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QListWidget, QListWidgetItem, QLabel, QLineEdit, QMenu, QSizePolicy,
 )
-from PyQt6.QtCore import Qt, QSize, pyqtSignal
-from PyQt6.QtGui import QAction, QFontMetrics
+from PyQt6.QtCore import Qt, QSize, pyqtSignal, QEvent
+from PyQt6.QtGui import QAction, QFontMetrics, QPainter, QPalette
 
 from storage.repository import ConversationStore
 from services.export import export_conversation_file
@@ -17,37 +17,67 @@ from ui.theme import (
 
 
 class TitleLabel(QLabel):
+    """Single-line title; paints elided text so QListWidget layouts cannot wrap it."""
+
     double_clicked = pyqtSignal()
 
     def __init__(self, text: str = "", parent=None):
         super().__init__(parent)
-        self._full_text = text
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        self._elide()
+        self._full_text = _normalize_title(text)
+        self.setToolTip(self._full_text)
+        self.setWordWrap(False)
+        self.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        super().setText("")
+        self._sync_height()
 
     def setText(self, text: str):
-        self._full_text = text
-        self._elide()
+        self._full_text = _normalize_title(text)
+        self.setToolTip(self._full_text)
+        super().setText("")
+        self.update()
 
     def full_text(self) -> str:
         return self._full_text
 
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self._elide()
-
-    def _elide(self):
-        if self.width() <= 0:
-            super().setText(self._full_text)
-            return
-        elided = self.fontMetrics().elidedText(
-            self._full_text, Qt.TextElideMode.ElideRight, self.width(),
+    def elided_display(self, width: int | None = None) -> str:
+        w = width if width is not None else max(1, self.contentsRect().width())
+        return self.fontMetrics().elidedText(
+            self._full_text, Qt.TextElideMode.ElideRight, max(1, w),
         )
-        super().setText(elided)
+
+    def _sync_height(self):
+        h = self.fontMetrics().height()
+        self.setFixedHeight(h + 2)
+
+    def apply_font(self):
+        self._sync_height()
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        try:
+            painter.setFont(self.font())
+            color = self.palette().color(QPalette.ColorRole.WindowText)
+            if not color.isValid():
+                color = self.palette().color(QPalette.ColorRole.Text)
+            painter.setPen(color)
+            rect = self.contentsRect()
+            painter.drawText(
+                rect,
+                int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+                self.elided_display(rect.width()),
+            )
+        finally:
+            painter.end()
 
     def mouseDoubleClickEvent(self, event):
         self.double_clicked.emit()
         super().mouseDoubleClickEvent(event)
+
+
+def _normalize_title(text: str) -> str:
+    return " ".join(str(text).split())
 
 
 class RenameEdit(QLineEdit):
@@ -114,6 +144,11 @@ class ConversationItem(QWidget):
         row.addWidget(self.del_btn)
 
         self.apply_appearance()
+        self._sync_delete_visibility()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.title_lbl.update()
 
     def apply_appearance(self):
         p = palette()
@@ -123,6 +158,7 @@ class ConversationItem(QWidget):
         self.title_lbl.setStyleSheet(
             f"font-size:{fs}px; color:{p['TEXT']}; background:transparent;"
         )
+        self.title_lbl.apply_font()
         self.title_edit.setStyleSheet(
             f"font-size:{fs}px; color:{p['TEXT']}; background:{p['BG3']};"
             f"border:1px solid {p['BORDER']}; padding:1px 4px;"
@@ -139,7 +175,11 @@ class ConversationItem(QWidget):
             f"QLabel {{ color:{p['TEXT_DIM']}; background:transparent; font-size:{icon_fs}px; }}"
             "QLabel:hover { color:#ff5555; }"
         )
-        self.title_lbl._elide()
+        self.title_lbl.update()
+        self._sync_delete_visibility()
+
+    def _sync_delete_visibility(self):
+        self.del_btn.setVisible(not self._pinned)
 
     def _start_edit(self):
         self.edit_started.emit(self)
@@ -163,8 +203,11 @@ class ConversationItem(QWidget):
         self.title_lbl.show()
 
     def cancel_edit(self):
-        if self.title_edit.isVisible():
-            self._cancel_edit()
+        try:
+            if self.title_edit.isVisible():
+                self._cancel_edit()
+        except RuntimeError:
+            pass
 
     def _context_menu(self, pos):
         menu = QMenu(self)
@@ -216,9 +259,8 @@ class ConversationPanel(QWidget):
         self.no_results.hide()
 
         self.list = QListWidget()
-        self.list.itemClicked.connect(
-            lambda item: self.selected.emit(item.data(Qt.ItemDataRole.UserRole))
-        )
+        self.list.itemClicked.connect(self._on_item_clicked)
+        self.list.viewport().installEventFilter(self)
         root.addWidget(self.list)
         root.addWidget(self.no_results)
 
@@ -237,6 +279,14 @@ class ConversationPanel(QWidget):
 
     def apply_appearance(self):
         self._apply_styles()
+        self._refresh_item_titles()
+
+    def eventFilter(self, obj, event):
+        if obj is self.list.viewport() and event.type() == QEvent.Type.Resize:
+            self._refresh_item_titles()
+        return super().eventFilter(obj, event)
+
+    def _refresh_item_titles(self):
         for i in range(self.list.count()):
             item = self.list.item(i)
             widget = self.list.itemWidget(item)
@@ -246,7 +296,19 @@ class ConversationPanel(QWidget):
     def _apply_filter(self):
         self.refresh()
 
+    def _on_item_clicked(self, item: QListWidgetItem):
+        widget = self.list.itemWidget(item)
+        if widget is not None and widget is self._editing_item:
+            return
+        if self._editing_item is not None:
+            self._editing_item.cancel_edit()
+            self._editing_item = None
+        path = item.data(Qt.ItemDataRole.UserRole)
+        if path:
+            self.selected.emit(str(path))
+
     def refresh(self):
+        self._editing_item = None
         current_path = None
         if self.list.currentItem():
             current_path = self.list.currentItem().data(Qt.ItemDataRole.UserRole)
@@ -300,14 +362,16 @@ class ConversationPanel(QWidget):
         self.refresh()
 
     def _on_edit_started(self, item: ConversationItem):
-        if self._editing_item and self._editing_item is not item:
-            self._editing_item.cancel_edit()
+        prev = self._editing_item
+        if prev is not None and prev is not item:
+            prev.cancel_edit()
         self._editing_item = item
 
     def _rename(self, path: str, title: str):
         conv_id = self.store.rename(path, title)
         self.renamed.emit(conv_id, title)
         self._editing_item = None
+        self.refresh()
 
     def _toggle_pin(self, path: str):
         self.store.toggle_pin(path)

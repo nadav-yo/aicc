@@ -31,6 +31,7 @@ from services.crew import (
     get_crew_member,
     summoned_members,
 )
+from services.crew_context import crew_context_window
 from services.tool_policy import ConversationToolPolicy, ToolApprovalBus
 from ui.widgets.tool_approval_dialog import handle_pending_approval
 from services.compaction import CompactionThread, should_compact, can_compact, _estimate_tokens
@@ -127,6 +128,13 @@ def _tool_call_notice(name: str, inputs: dict, cwd: str) -> str:
         if pattern:
             return f"Searching files for '{pattern}' in '{directory}'"
         return f"Searching files in '{directory}'"
+    if name == "list_files":
+        directory = _display_tool_path(str(inputs.get("directory") or "."), cwd)
+        glob = _compact_text(inputs.get("glob") or "*")
+        return f"Listing files in '{directory}' matching '{glob}'"
+    if name == "search_project_chats":
+        query = _compact_text(inputs.get("query") or "", 96)
+        return f"Searching project chat history for '{query}'" if query else "Searching project chat history"
     if name == "bash":
         command = _compact_text(inputs.get("command") or "")
         return f"Running command: {command}" if command else "Running command"
@@ -484,6 +492,8 @@ class ChatPanel(QWidget):
 
     def load_conversation(self, path: str):
         data = self.store.load(path)
+        if self.conv_id == data.get("id") and self.conv_data is not None:
+            return
         self.new_conversation()
         self.conv_id   = data["id"]
         self.conv_data = data
@@ -672,6 +682,7 @@ class ChatPanel(QWidget):
             self._add_notice(_crew_notice_text(crew_metadata(draft["crew"], self._settings.load()), "joined"))
 
         self._save(touch_updated=True)
+        self._maybe_auto_title()
 
         self._start_assistant(skill=draft.get("skill"), crew=draft.get("crew"))
         self._pin_to_bottom()
@@ -688,6 +699,7 @@ class ChatPanel(QWidget):
             "created_at": now,
             "updated_at": now,
             "model":      model,
+            "cwd":        self.cwd,
             "messages":   [],
         }
         self._runtime_for(self.conv_id)
@@ -729,8 +741,9 @@ class ChatPanel(QWidget):
         allowed_tools = list(crew.tools) if crew else (skill.tools if skill else None)
         write_roots = list(crew.write_roots) if crew else None
         tool_policy = self._runtime_for(conv_id).tool_policy
+        thread_history = crew_context_window(history_snapshot) if crew else copy.deepcopy(history_snapshot)
         thread = ChatThread(
-            model, copy.deepcopy(history_snapshot), system, self.cwd,
+            model, copy.deepcopy(thread_history), system, self.cwd,
             allowed_tools=allowed_tools,
             tool_policy=tool_policy,
             approval_bus=self._approval_bus,
@@ -909,7 +922,18 @@ class ChatPanel(QWidget):
             env_var = api_key_env_var(cfg.api_key_spec)
             if key or (env_var and os.environ.get(env_var)) or (cfg.api_key_spec and not env_var):
                 configured.append(provider)
-        return configured
+        order = saved.get("provider_order", [])
+        if not isinstance(order, list):
+            return configured
+        ordered = []
+        seen = set()
+        for provider in order:
+            provider = str(provider)
+            if provider in configured and provider not in seen:
+                ordered.append(provider)
+                seen.add(provider)
+        ordered.extend(provider for provider in configured if provider not in seen)
+        return ordered
 
     def _build_system(
         self,
@@ -1343,16 +1367,8 @@ class ChatPanel(QWidget):
             return
         if not self.conv_data.get("title_auto", False):
             return
-        assistant_msgs = [
-            m for m in self.history
-            if m["role"] == "assistant" and not m.get("crew")
-        ]
-        if len(assistant_msgs) != 1:
-            return
-
-        user_msg = next((m for m in self.history if m["role"] == "user"), None)
-        asst_msg = assistant_msgs[0] if assistant_msgs else None
-        if not user_msg or not asst_msg:
+        user_msgs = [m for m in self.history if m.get("role") == "user"]
+        if len(user_msgs) != 1:
             return
 
         if self.title_thread and self.title_thread.isRunning():
@@ -1361,8 +1377,7 @@ class ChatPanel(QWidget):
         self.title_thread = TitleThread(
             self.conv_id,
             self.model_combo.currentText(),
-            content_preview(user_msg["content"]),
-            content_preview(asst_msg["content"]),
+            content_preview(user_msgs[0]["content"])[:100],
         )
         self.title_thread.done.connect(self._on_auto_title_done)
         self.title_thread.error.connect(self._on_auto_title_error)

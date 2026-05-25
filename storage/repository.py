@@ -8,15 +8,22 @@ from config import CONV_DIR
 class ConversationStore:
     def __init__(self):
         CONV_DIR.mkdir(parents=True, exist_ok=True)
+        _prune_leaked_test_conversations()
 
     def list_all(self) -> list[tuple[Path, dict]]:
-        convs = []
+        by_id: dict[str, tuple[Path, dict]] = {}
         for p in CONV_DIR.glob("*.json"):
             try:
-                data = json.loads(p.read_text())
-                convs.append((p, _summary(data)))
+                data = json.loads(p.read_text(encoding="utf-8"))
             except Exception:
-                pass
+                continue
+            summary = _summary(data)
+            conv_id = summary.get("id") or p.stem
+            summary["id"] = conv_id
+            prev = by_id.get(conv_id)
+            if prev is None or _is_newer(summary, prev[1], p, prev[0]):
+                by_id[conv_id] = (p, summary)
+        convs = list(by_id.values())
         pinned = sorted(
             [c for c in convs if c[1].get("pinned")],
             key=lambda x: x[1].get("updated_at", ""),
@@ -36,16 +43,32 @@ class ConversationStore:
         Path(path).unlink(missing_ok=True)
 
     def save(self, conv_id: str, data: dict) -> Path:
+        data["id"] = conv_id
         path = CONV_DIR / f"{conv_id}.json"
-        path.write_text(json.dumps(data, indent=2))
+        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        self._drop_duplicate_files(conv_id, keep=path)
         return path
 
     def rename(self, path: str, title: str) -> str:
         data = self.load(path)
         data["title"] = title.strip() or "Untitled"
         data["title_auto"] = False
-        self.save(data["id"], data)
-        return data["id"]
+        conv_id = data.get("id") or Path(path).stem
+        self.save(conv_id, data)
+        return conv_id
+
+    def _drop_duplicate_files(self, conv_id: str, *, keep: Path) -> None:
+        keep_resolved = keep.resolve()
+        for p in CONV_DIR.glob("*.json"):
+            if p.resolve() == keep_resolved:
+                continue
+            try:
+                other = json.loads(p.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            other_id = other.get("id") or p.stem
+            if other_id == conv_id:
+                p.unlink(missing_ok=True)
 
     def toggle_pin(self, path: str) -> bool:
         data = self.load(path)
@@ -92,6 +115,31 @@ def _message_text(content) -> str:
     return str(content)
 
 
+def _prune_leaked_test_conversations() -> None:
+    """Remove c1/First fixture files if pytest ever wrote them to the real ~/.aicc dir."""
+    for p in list(CONV_DIR.glob("*.json")):
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if (
+            data.get("id") == "c1"
+            and data.get("title") == "First"
+            and not data.get("messages")
+            and data.get("updated_at") == "2026-01-01T12:00:00"
+        ):
+            p.unlink(missing_ok=True)
+
+
+def _is_newer(summary: dict, prev_summary: dict, path: Path, prev_path: Path) -> bool:
+    cur = summary.get("updated_at", "")
+    old = prev_summary.get("updated_at", "")
+    if cur != old:
+        return cur > old
+    conv_id = summary.get("id") or path.stem
+    return path.name == f"{conv_id}.json" and prev_path.name != f"{conv_id}.json"
+
+
 def _summary(data: dict) -> dict:
     return {
         "id": data.get("id", ""),
@@ -100,6 +148,7 @@ def _summary(data: dict) -> dict:
         "created_at": data.get("created_at", ""),
         "updated_at": data.get("updated_at", ""),
         "model": data.get("model", ""),
+        "cwd": data.get("cwd", ""),
         "pinned": data.get("pinned", False),
         "message_count": len(data.get("messages", [])),
     }

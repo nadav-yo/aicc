@@ -24,6 +24,22 @@ def qapp():
     yield app
 
 
+@pytest.fixture
+def conv_dir(monkeypatch, tmp_path, isolate_aicc_home):
+    path = tmp_path / "conversations"
+    path.mkdir()
+    monkeypatch.setattr("config.CONV_DIR", path)
+    monkeypatch.setattr("storage.repository.CONV_DIR", path)
+    return path
+
+
+@pytest.fixture
+def store(conv_dir):
+    from storage.repository import ConversationStore
+
+    return ConversationStore()
+
+
 @pytest.fixture(autouse=True)
 def isolate_aicc_home(monkeypatch, tmp_path):
     """Keep extension loading deterministic (ignore real ~/.aicc/extensions)."""

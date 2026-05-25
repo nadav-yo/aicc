@@ -49,6 +49,13 @@ def test_loop_anthropic_runs_tool_then_finishes(workspace, qapp):
         m.get("role") == "user" and isinstance(m.get("content"), list)
         for m in thread.history
     )
+    tool_result_message = next(
+        m for m in thread.history
+        if m.get("role") == "user" and isinstance(m.get("content"), list)
+    )
+    assert tool_result_message.get("synthetic") == "tool_results"
+    assert tool_result_message["content"][-1]["type"] == "text"
+    assert "Active task: read file" in tool_result_message["content"][-1]["text"]
     assert text == "done"
 
 

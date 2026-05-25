@@ -1,6 +1,8 @@
 import services.model_registry as reg
 from storage.settings import SettingsStore
 from ui.widgets.settings_dialog import SettingsDialog
+from ui.widgets.chat_panel import ChatPanel
+from PyQt6.QtWidgets import QAbstractItemView
 
 
 def _model_ids(models: list[dict]) -> list[str]:
@@ -11,6 +13,10 @@ def _move_model(dialog: SettingsDialog, source: int, dest: int) -> None:
     item = dialog.model_order_list.takeItem(source)
     dialog.model_order_list.insertItem(dest, item)
     dialog._apply_model_order()
+
+
+def _move_provider(dialog: SettingsDialog, source: int, dest: int) -> None:
+    dialog._move_provider(source, dest)
 
 
 def _provider_row(dialog: SettingsDialog, provider_id: str) -> int:
@@ -46,7 +52,9 @@ def test_model_order_drag_updates_provider_order_without_default_column(qapp, mo
         dialog.providers_table.selectRow(row)
         _move_model(dialog, 2, 0)
 
-        assert dialog.providers_table.columnCount() == 4
+        assert dialog.providers_table.columnCount() == 5
+        assert dialog.providers_table.dragDropMode() == QAbstractItemView.DragDropMode.NoDragDrop
+        assert not dialog.providers_table.item(row, 0).icon().isNull()
         assert _model_ids(dialog._providers[row]["models"]) == [
             "model-c", "model-a", "model-b",
         ]
@@ -128,3 +136,72 @@ def test_model_order_list_disables_without_provider(qapp):
 
     assert not dialog.model_order_list.isEnabled()
     assert dialog.model_order_list.count() == 0
+
+
+def test_provider_order_drag_is_saved_and_reloaded(qapp, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    reg.save_user_providers({
+        "local-a": {
+            "api": "openai-compatible",
+            "apiKey": "LOCAL_A_KEY",
+            "models": [{"id": "model-a"}],
+        },
+        "local-b": {
+            "api": "openai-compatible",
+            "apiKey": "LOCAL_B_KEY",
+            "models": [{"id": "model-b"}],
+        },
+    })
+    reg.reload()
+
+    try:
+        store = SettingsStore()
+        store.save({
+            "provider_api_keys": {
+                "local-a": "key-a",
+                "local-b": "key-b",
+            },
+        })
+        dialog = SettingsDialog(store)
+
+        _move_provider(dialog, 1, 0)
+        dialog._save()
+
+        saved = store.load()
+        assert saved["provider_order"][:2] == ["local-b", "local-a"]
+
+        reloaded = SettingsDialog(store)
+        assert [provider["id"] for provider in reloaded._providers[:2]] == [
+            "local-b", "local-a",
+        ]
+    finally:
+        reg.save_user_providers({})
+        reg.reload()
+
+
+def test_chat_panel_configured_providers_follow_saved_order(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    reg.save_user_providers({})
+    reg.reload()
+
+    try:
+        store = SettingsStore()
+        store.save({
+            "provider_api_keys": {
+                "claude": "anthropic-key",
+                "openai": "openai-key",
+            },
+            "provider_order": ["openai", "claude"],
+        })
+        class DummyPanel:
+            pass
+
+        panel = DummyPanel()
+        panel._settings = store
+
+        assert ChatPanel._configured_providers(panel)[:2] == ["openai", "claude"]
+    finally:
+        reg.save_user_providers({})
+        reg.reload()

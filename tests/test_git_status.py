@@ -22,6 +22,7 @@ class TestParseStatusLine:
             ("?? new.txt", "??", "?", "new.txt"),
             (' M "spaced.py"', " M", "M", "spaced.py"),
             ("R  old -> new.py", "R ", "R", "new.py"),
+            ("A assets/foo.py", "A ", "A", "assets/foo.py"),
         ],
     )
     def test_parse(self, line, code, label, path):

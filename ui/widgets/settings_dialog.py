@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QTextEdit, QComboBox, QWidget, QFileDialog, QScrollArea, QSlider,
     QListWidget, QListWidgetItem, QStackedWidget, QFrame, QTableWidget,
     QTableWidgetItem, QHeaderView, QMessageBox, QToolButton, QStyle, QCheckBox,
-    QColorDialog, QTabWidget, QAbstractItemView,
+    QColorDialog, QTabWidget, QAbstractItemView, QSpinBox,
 )
 from PyQt6.QtCore import Qt, QSize, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QIcon, QPainter, QPen, QPixmap
@@ -16,7 +16,11 @@ from config import MODELS, SYSTEM_PROMPT
 from services import model_registry
 from services.crew import all_crew, crew_settings
 from services.model_registry import (
-    api_key_env_var, get_model_config, get_provider_config, load_user_providers,
+    api_default_context_window,
+    api_key_env_var,
+    get_model_config,
+    get_provider_config,
+    load_user_providers,
     save_user_providers,
 )
 from storage.settings import SettingsStore
@@ -92,6 +96,43 @@ def _drag_handle_icon() -> QIcon:
         painter.drawLine(4, y, 12, y)
     painter.end()
     return QIcon(pix)
+
+
+class _ReorderableProviderTable(QTableWidget):
+    row_moved = pyqtSignal(int, int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._drag_row = -1
+        self.setDragEnabled(False)
+        self.setAcceptDrops(False)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.NoDragDrop)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_row = self.rowAt(int(event.position().y()))
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._drag_row >= 0 and event.buttons() & Qt.MouseButton.LeftButton:
+            row = self.rowAt(int(event.position().y()))
+            if row >= 0:
+                self.selectRow(row)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        source = self._drag_row
+        self._drag_row = -1
+        dest = self.rowAt(int(event.position().y()))
+        if dest < 0:
+            dest = self.rowCount() - 1
+        if event.button() == Qt.MouseButton.LeftButton and source >= 0 and dest >= 0 and source != dest:
+            self.row_moved.emit(source, dest)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
 
 class _ModelOrderList(QListWidget):
@@ -356,7 +397,17 @@ class _ProviderDialog(QDialog):
         self.models.setStyleSheet(styles["field"])
         self._field(root, "Models", self.models)
 
-        hint = QLabel("For custom providers, models are saved to ~/.aicc/models.json. API keys stay in settings.")
+        self.context_window = QSpinBox()
+        self.context_window.setRange(4_096, 2_000_000)
+        self.context_window.setSingleStep(1024)
+        self.context_window.setGroupSeparatorShown(True)
+        self.context_window.setStyleSheet(styles["field"])
+        self._field(root, "Context window (tokens)", self.context_window)
+
+        hint = QLabel(
+            "For custom providers (e.g. Ollama), set the context size you configured in the server. "
+            "Models are saved to ~/.aicc/models.json; API keys stay in settings."
+        )
         hint.setWordWrap(True)
         hint.setStyleSheet(styles["hint"])
         root.addWidget(hint)
@@ -386,6 +437,9 @@ class _ProviderDialog(QDialog):
             self.base_url.setText(data.get("base_url", ""))
             self.api_key.setText(data.get("api_key", ""))
             self.models.setPlainText(_models_to_text(data.get("models", [])))
+            self.context_window.setValue(
+                int(data.get("context_window") or _default_context_window_for_kind(kind)),
+            )
         else:
             self._apply_kind_defaults()
 
@@ -405,14 +459,17 @@ class _ProviderDialog(QDialog):
             self.provider_id.setText("claude")
             self.base_url.clear()
             self.models.setPlainText(_models_to_text(_builtin_models("claude")))
+            self.context_window.setValue(_default_context_window_for_kind("anthropic"))
         elif kind == "openai":
             self.provider_id.setText("openai")
             self.base_url.clear()
             self.models.setPlainText(_models_to_text(_builtin_models("openai")))
+            self.context_window.setValue(_default_context_window_for_kind("openai"))
         else:
             self.provider_id.setText("")
             self.base_url.clear()
             self.models.clear()
+            self.context_window.setValue(_default_context_window_for_kind("custom"))
 
     def _accept_if_valid(self):
         provider_id = self.provider_id.text().strip()
@@ -447,7 +504,23 @@ class _ProviderDialog(QDialog):
             "api_key": self.api_key.text().strip(),
             "api_key_spec": api_key_spec,
             "models": _parse_models(self.models.toPlainText()),
+            "context_window": self.context_window.value(),
         }
+
+
+def _default_context_window_for_kind(kind: str) -> int:
+    if kind == "anthropic":
+        return api_default_context_window("anthropic")
+    if kind == "openai":
+        return api_default_context_window("openai-compatible")
+    return 32_768
+
+
+def _provider_context_window(provider: dict) -> int:
+    custom = provider.get("context_window")
+    if custom:
+        return int(custom)
+    return api_default_context_window(provider.get("api", "openai-compatible"))
 
 
 def _builtin_models(provider: str) -> list[dict]:
@@ -466,6 +539,22 @@ def _has_builtin_model_order_override(provider_id: str, models: list[dict]) -> b
         return False
     builtin_models = model_registry._BUILTIN.get(provider_id, {}).get("models", [])
     return _model_ids(models) != _model_ids(builtin_models)
+
+
+def _apply_provider_order(providers: list[dict], saved: dict) -> list[dict]:
+    order = saved.get("provider_order", [])
+    if not isinstance(order, list):
+        return providers
+    by_id = {provider["id"]: provider for provider in providers}
+    ordered = []
+    seen = set()
+    for provider_id in order:
+        provider = by_id.get(str(provider_id))
+        if provider and provider["id"] not in seen:
+            ordered.append(provider)
+            seen.add(provider["id"])
+    ordered.extend(provider for provider in providers if provider["id"] not in seen)
+    return ordered
 
 
 def _scroll_page(content: QWidget) -> QScrollArea:
@@ -678,15 +767,17 @@ class SettingsDialog(QDialog):
         row.addWidget(add_btn)
         layout.addLayout(row)
 
-        self.providers_table = QTableWidget(0, 4)
+        self.providers_table = _ReorderableProviderTable()
+        self.providers_table.setColumnCount(5)
         self.providers_table.setHorizontalHeaderLabels([
-            "Provider", "Type", "Endpoint", "",
+            "", "Provider", "Type", "Endpoint", "",
         ])
         self.providers_table.verticalHeader().setVisible(False)
         self.providers_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.providers_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.providers_table.setAlternatingRowColors(False)
         self.providers_table.itemSelectionChanged.connect(self._on_provider_selection_changed)
+        self.providers_table.row_moved.connect(self._move_provider)
         self.providers_table.setStyleSheet(
             f"QTableWidget {{ background:{palette()['BG2']}; color:{palette()['TEXT']};"
             f"border:1px solid {palette()['BORDER']}; border-radius:8px; gridline-color:{palette()['BORDER']}; }}"
@@ -694,10 +785,12 @@ class SettingsDialog(QDialog):
             f"border:none; border-bottom:1px solid {palette()['BORDER']}; padding:6px; }}"
         )
         header = self.providers_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        header.resizeSection(0, 30)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         layout.addWidget(self.providers_table)
 
         order_lbl = QLabel("Model order")
@@ -744,10 +837,12 @@ class SettingsDialog(QDialog):
         for provider_id, raw in user_providers.items():
             configured.append(self._provider_row(provider_id, saved, raw))
             seen.add(provider_id)
-        for provider_id in _BUILTIN_IDS - seen:
+        for provider_id in ("claude", "openai"):
+            if provider_id in seen:
+                continue
             if self._has_builtin_key(provider_id, saved):
                 configured.append(self._provider_row(provider_id, saved, None))
-        return configured
+        return _apply_provider_order(configured, saved)
 
     def _provider_row(self, provider_id: str, saved: dict, raw: dict | None) -> dict:
         cfg = get_provider_config(provider_id)
@@ -769,6 +864,13 @@ class SettingsDialog(QDialog):
             or (raw or {}).get("api_key_spec")
             or (cfg.api_key_spec if cfg else _provider_env_var(provider_id))
         )
+        raw_window = (raw or {}).get("contextWindow", (raw or {}).get("context_window"))
+        if raw_window is not None:
+            context_window = int(raw_window)
+        elif cfg and cfg.context_window:
+            context_window = cfg.context_window
+        else:
+            context_window = _default_context_window_for_kind(kind)
         return {
             "id": provider_id,
             "kind": kind,
@@ -777,6 +879,7 @@ class SettingsDialog(QDialog):
             "api_key": self._saved_provider_key(saved, provider_id),
             "api_key_spec": api_key_spec,
             "models": models,
+            "context_window": context_window,
         }
 
     def _saved_provider_key(self, saved: dict, provider_id: str) -> str:
@@ -804,9 +907,13 @@ class SettingsDialog(QDialog):
         self.providers_table.setRowCount(0)
         for row_idx, provider in enumerate(self._providers):
             self.providers_table.insertRow(row_idx)
-            self.providers_table.setItem(row_idx, 0, QTableWidgetItem(_provider_title(provider["id"])))
-            self.providers_table.setItem(row_idx, 1, QTableWidgetItem(provider["kind"].replace("-", " ")))
-            self.providers_table.setItem(row_idx, 2, QTableWidgetItem(provider.get("base_url") or "Built-in"))
+            grip = QTableWidgetItem()
+            grip.setIcon(_drag_handle_icon())
+            grip.setToolTip("Drag to reorder providers")
+            self._set_provider_item(row_idx, 0, grip)
+            self._set_provider_item(row_idx, 1, QTableWidgetItem(_provider_title(provider["id"])))
+            self._set_provider_item(row_idx, 2, QTableWidgetItem(provider["kind"].replace("-", " ")))
+            self._set_provider_item(row_idx, 3, QTableWidgetItem(provider.get("base_url") or "Built-in"))
 
             actions = QWidget()
             buttons = QHBoxLayout(actions)
@@ -823,13 +930,32 @@ class SettingsDialog(QDialog):
             remove.clicked.connect(lambda _, i=row_idx: self._remove_provider(i))
             buttons.addWidget(edit)
             buttons.addWidget(remove)
-            self.providers_table.setCellWidget(row_idx, 3, actions)
+            self.providers_table.setCellWidget(row_idx, 4, actions)
         self.providers_table.blockSignals(False)
         self.providers_table.resizeRowsToContents()
         if self._providers:
             self.providers_table.selectRow(min(selected_row, len(self._providers) - 1))
         else:
             self._refresh_model_order_list(-1)
+
+    def _set_provider_item(self, row: int, column: int, item: QTableWidgetItem):
+        item.setFlags(
+            item.flags()
+            | Qt.ItemFlag.ItemIsDragEnabled
+            | Qt.ItemFlag.ItemIsDropEnabled
+        )
+        self.providers_table.setItem(row, column, item)
+
+    def _move_provider(self, source: int, dest: int):
+        if source < 0 or source >= len(self._providers):
+            return
+        dest = max(0, min(dest, len(self._providers) - 1))
+        if source == dest:
+            return
+        provider = self._providers.pop(source)
+        self._providers.insert(dest, provider)
+        self._refresh_provider_table()
+        self.providers_table.selectRow(dest)
 
     def _on_provider_selection_changed(self):
         self._refresh_model_order_list(self.providers_table.currentRow())
@@ -1071,11 +1197,23 @@ class SettingsDialog(QDialog):
         self._update_compaction_label(self.compaction_slider.value())
 
     def _update_compaction_label(self, pct: int):
-        claude_tokens = int(180_000 * pct / 100) - 16_384
-        openai_tokens = int(100_000 * pct / 100) - 16_384
+        from services.compaction import RESERVE_TOKENS
+
+        if self._providers:
+            parts = []
+            for provider in self._providers:
+                window = _provider_context_window(provider)
+                limit = int(window * pct / 100) - RESERVE_TOKENS
+                parts.append(f"{provider['id']}: ~{limit:,}")
+            examples = ", ".join(parts)
+        else:
+            examples = (
+                f"Claude ~{int(180_000 * pct / 100) - RESERVE_TOKENS:,}, "
+                f"OpenAI-compatible ~{int(100_000 * pct / 100) - RESERVE_TOKENS:,}"
+            )
         self.compaction_label.setText(
-            f"Compact when a conversation exceeds {pct}% of the context window "
-            f"(~{claude_tokens:,} tokens for Claude, ~{openai_tokens:,} for OpenAI)."
+            f"Compact when a conversation exceeds {pct}% of the active model's context window "
+            f"({examples} tokens at this threshold)."
         )
 
     def _save(self):
@@ -1132,6 +1270,10 @@ class SettingsDialog(QDialog):
                 entry["baseUrl"] = provider["base_url"]
             if not is_builtin or has_model_override:
                 entry["models"] = provider.get("models", [])
+            api = provider.get("api", "openai-compatible")
+            window = int(provider.get("context_window") or 0)
+            if window > 0 and (not is_builtin or window != api_default_context_window(api)):
+                entry["contextWindow"] = window
             user_providers[provider_id] = entry
 
         data.update({
@@ -1144,6 +1286,7 @@ class SettingsDialog(QDialog):
             "enter_to_send": self.enter_to_send_check.isChecked(),
             "compaction_threshold_pct": self.compaction_slider.value(),
             "default_models": default_models,
+            "provider_order": [provider["id"] for provider in self._providers],
             "crew": crew,
             "crew_models": crew_models,
             "avatar_human": persist_portrait(self.human_portrait.value(), "human"),
@@ -1152,6 +1295,7 @@ class SettingsDialog(QDialog):
         if not configured_ids:
             data["default_models"] = {}
             data["provider_api_keys"] = {}
+            data["provider_order"] = []
             data["anthropic_api_key"] = ""
             data["openai_api_key"] = ""
         save_user_providers(user_providers)

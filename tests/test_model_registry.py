@@ -36,6 +36,24 @@ def test_get_model_config_unknown_fallback():
     assert cfg.display_name == "unknown"
 
 
+def test_context_window_tokens_honors_provider_override(tmp_path, monkeypatch):
+    path = tmp_path / ".aicc" / "models.json"
+    monkeypatch.setattr(reg, "_MODELS_PATH", path)
+    reg.save_user_providers({
+        "ollama": {
+            "api": "openai-compatible",
+            "apiKey": "ollama",
+            "baseUrl": "http://localhost:11434/v1",
+            "contextWindow": 8192,
+            "models": [{"id": "llama-test", "name": "Llama"}],
+        }
+    })
+    reg.reload()
+    assert reg.context_window_tokens("llama-test") == 8192
+    assert reg.get_model_config("claude-sonnet-4-6").context_window is None
+    assert reg.context_window_tokens("claude-sonnet-4-6") == 180_000
+
+
 def test_load_save_user_providers(tmp_path, monkeypatch):
     path = tmp_path / ".aicc" / "models.json"
     monkeypatch.setattr(reg, "_MODELS_PATH", path)

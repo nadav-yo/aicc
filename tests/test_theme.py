@@ -58,8 +58,8 @@ def test_markdown_css_and_stylesheet(qapp):
 
 def test_crew_styles_are_distinct():
     scout = bubble_label_style(False, crew_id="scout")
-    critic = bubble_label_style(False, crew_id="critic")
-    assert scout != critic
+    archivist = bubble_label_style(False, crew_id="archivist")
+    assert scout != archivist
     assert "#123456" in bubble_label_style(False, crew_id="scout", crew_color="#123456")
     assert "#123456" in crew_name_style("scout", "#123456")
-    assert crew_tone("tester")["accent"].startswith("#")
+    assert crew_tone("archivist")["accent"].startswith("#")

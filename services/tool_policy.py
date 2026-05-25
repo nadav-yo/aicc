@@ -58,9 +58,10 @@ def validate_tool_paths(name: str, inputs: dict, cwd: str) -> str | None:
         return _check_path_input(inputs, cwd, "read_file")
     if name == "edit_file":
         return _check_path_input(inputs, cwd, "edit_file")
-    if name == "search_files":
+    if name in ("list_files", "search_files"):
         directory = inputs.get("directory") or cwd
-        return _check_resolved_path(directory, cwd, "search directory")
+        label = "list directory" if name == "list_files" else "search directory"
+        return _check_resolved_path(directory, cwd, label)
     return None
 
 
@@ -108,7 +109,7 @@ class ToolApprovalBus(QObject):
         if err:
             return f"[tool error] {err}"
 
-        if name in ("read_file", "search_files"):
+        if name in ("read_file", "list_files", "search_files"):
             return None
 
         if name == "edit_file":

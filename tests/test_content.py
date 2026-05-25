@@ -64,6 +64,21 @@ def test_prepare_for_providers():
     assert "created_at" not in openai[0]
 
 
+def test_prepare_anthropic_preserves_tool_results_with_anchor_text():
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "tu_1", "content": "file"},
+                {"type": "text", "text": "Continue the active task."},
+            ],
+        }
+    ]
+    anthropic = prepare_for_anthropic(messages)
+    assert anthropic[0]["content"][0]["type"] == "tool_result"
+    assert anthropic[0]["content"][1]["type"] == "text"
+
+
 def test_prepare_prefixes_crew_assistant_for_model_context():
     messages = [
         {
@@ -81,3 +96,24 @@ def test_prepare_prefixes_crew_assistant_for_model_context():
         "role": "assistant",
         "content": "Scout: found it",
     }
+
+
+def test_prepare_skips_crew_bubble_after_lead_synthesis():
+    messages = [
+        {"role": "user", "content": "check"},
+        {"role": "assistant", "content": "found it", "crew": {"id": "scout", "name": "Scout"}},
+        {"role": "assistant", "content": "summary"},
+        {"role": "user", "content": "next"},
+    ]
+    anthropic = prepare_for_anthropic(messages)
+    assert [m["content"] for m in anthropic] == ["check", "summary", "next"]
+
+
+def test_prepare_keeps_direct_crew_reply_without_lead_synthesis():
+    messages = [
+        {"role": "user", "content": "@Scout check"},
+        {"role": "assistant", "content": "found it", "crew": {"id": "scout", "name": "Scout"}},
+        {"role": "user", "content": "explain"},
+    ]
+    openai = prepare_for_openai(messages)
+    assert openai[1]["content"] == "Scout: found it"

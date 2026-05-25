@@ -5,19 +5,6 @@ import pytest
 from storage.repository import ConversationStore, _message_text, _summary
 
 
-@pytest.fixture
-def conv_dir(monkeypatch, tmp_path):
-    path = tmp_path / "conversations"
-    path.mkdir()
-    monkeypatch.setattr("storage.repository.CONV_DIR", path)
-    return path
-
-
-@pytest.fixture
-def store(conv_dir):
-    return ConversationStore()
-
-
 def _sample_conv(conv_id: str = "20260101_120000", **overrides) -> dict:
     data = {
         "id": conv_id,
@@ -70,6 +57,43 @@ class TestConversationStore:
         store.rename(str(path), "   ")
         assert store.load(str(path))["title"] == "Untitled"
 
+    def test_save_removes_duplicate_file_for_same_id(self, store, conv_dir):
+        legacy = conv_dir / "legacy.json"
+        legacy.write_text(
+            json.dumps(_sample_conv("same-id", title="Ghost")),
+            encoding="utf-8",
+        )
+        store.save("same-id", _sample_conv("same-id", title="Canonical"))
+        assert not legacy.exists()
+        assert (conv_dir / "same-id.json").exists()
+        assert store.load(str(conv_dir / "same-id.json"))["title"] == "Canonical"
+
+    def test_prune_leaked_test_conversation_fixture(self, conv_dir):
+        ghost = conv_dir / "c1.json"
+        ghost.write_text(
+            json.dumps(
+                {
+                    "id": "c1",
+                    "title": "First",
+                    "messages": [],
+                    "updated_at": "2026-01-01T12:00:00",
+                }
+            ),
+            encoding="utf-8",
+        )
+        ConversationStore()
+        assert not ghost.exists()
+
+    def test_list_all_dedupes_by_conversation_id(self, store, conv_dir):
+        (conv_dir / "ghost.json").write_text(
+            json.dumps(_sample_conv("dup", title="Ghost", updated_at="2026-01-01")),
+            encoding="utf-8",
+        )
+        store.save("dup", _sample_conv("dup", title="Live", updated_at="2026-02-01"))
+        listed = store.list_all()
+        assert len(listed) == 1
+        assert listed[0][1]["title"] == "Live"
+
     def test_toggle_pin(self, store):
         path = store.save("x", _sample_conv("x", pinned=False))
         assert store.toggle_pin(str(path)) is True
@@ -103,4 +127,6 @@ class TestHelpers:
 
     def test_summary_message_count(self):
         assert _summary(_sample_conv())["message_count"] == 1
-        assert _summary({**_sample_conv(), "messages": [{}, {}, {}]})["message_count"] == 3
+        summary = _summary({**_sample_conv(), "cwd": "/repo", "messages": [{}, {}, {}]})
+        assert summary["message_count"] == 3
+        assert summary["cwd"] == "/repo"

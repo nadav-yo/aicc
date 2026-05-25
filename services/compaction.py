@@ -3,12 +3,12 @@ from openai import OpenAI
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from config import SYSTEM_PROMPT
-from services.model_registry import get_model_config, resolve_api_key
+from services.model_registry import context_window_tokens, get_model_config, resolve_api_key
 from services.content import content_length, content_preview
 from ui.theme import compaction_threshold_pct
 
-# Mirrors the Pi harness numbers
-CONTEXT_WINDOWS  = {"anthropic": 180_000, "openai-compatible": 100_000}  # tokens, conservative
+# API defaults when no provider/model contextWindow is configured (see model_registry).
+CONTEXT_WINDOWS = {"anthropic": 180_000, "openai-compatible": 100_000}
 RESERVE_TOKENS   = 16_384   # headroom for the summary prompt + output
 KEEP_RECENT_TOKENS = 20_000  # tokens retained verbatim after the cut point
 
@@ -34,7 +34,7 @@ def can_compact(messages: list[dict]) -> bool:
 
 
 def should_compact(model: str, messages: list[dict]) -> bool:
-    window = CONTEXT_WINDOWS.get(get_model_config(model).api, 100_000)
+    window = context_window_tokens(model)
     pct = compaction_threshold_pct()
     limit = int(window * pct / 100) - RESERVE_TOKENS
     return _estimate_tokens(messages) > limit

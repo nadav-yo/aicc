@@ -11,6 +11,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from services.crew import (
     ASK_CREW_TOOL_NAME,
+    all_crew,
     ask_crew_tool_anthropic,
     ask_crew_tool_openai,
     crew_model_choice,
@@ -20,14 +21,18 @@ from services.crew import (
     crew_system_prompt,
     get_crew_member,
 )
+from services.crew_context import crew_context_window
 from services.model_registry import get_model_config, resolve_api_key
-from services.content import prepare_for_anthropic, prepare_for_openai
+from services.content import content_preview, prepare_for_anthropic, prepare_for_openai
 from services.tool_policy import ConversationToolPolicy, ToolApprovalBus, resolve_path
 from services.tools import tools_anthropic, tools_openai, execute, is_parallel_safe, tool_approval
 from services.tool_registry import HookContext, run_extension_hooks
 from services.usage import merge_usage, normalize_usage
 
 _MAX_PARALLEL = 8
+_MAX_CREW_CALLS_PER_TURN = 2
+_ACTIVE_TASK_PREVIEW_CHARS = 500
+_CREW_ONLY_TOOLS = {"search_project_chats"}
 _CHUNK_EMIT_INTERVAL_SEC = 0.10
 _CHUNK_EMIT_MAX_CHARS = 512
 
@@ -70,6 +75,7 @@ class ChatThread(QThread):
         self._chunk_buffer: list[str] = []
         self._last_chunk_emit = 0.0
         self.last_usage: dict = {}
+        self._crew_calls = 0
 
     def cancel(self):
         self._cancel.set()
@@ -79,7 +85,7 @@ class ChatThread(QThread):
     def _tools_anthropic(self) -> list:
         tools = tools_anthropic(self.cwd)
         if self._allowed_tools is None:
-            selected = tools
+            selected = [t for t in tools if t["name"] not in _CREW_ONLY_TOOLS]
         else:
             selected = [t for t in tools if t["name"] in self._allowed_tools]
         if self._enable_crew_tool and (self._allowed_tools is None or ASK_CREW_TOOL_NAME in self._allowed_tools):
@@ -89,7 +95,10 @@ class ChatThread(QThread):
     def _tools_openai(self) -> list:
         tools = tools_openai(self.cwd)
         if self._allowed_tools is None:
-            selected = tools
+            selected = [
+                t for t in tools
+                if t["function"]["name"] not in _CREW_ONLY_TOOLS
+            ]
         else:
             selected = [t for t in tools if t["function"]["name"] in self._allowed_tools]
         if self._enable_crew_tool and (self._allowed_tools is None or ASK_CREW_TOOL_NAME in self._allowed_tools):
@@ -232,7 +241,11 @@ class ChatThread(QThread):
                 })
 
             if tool_results and not self._cancel.is_set():
-                self.history.append({"role": "user", "content": tool_results})
+                self.history.append({
+                    "role": "user",
+                    "content": self._tool_results_with_active_task(tool_results),
+                    "synthetic": "tool_results",
+                })
             else:
                 full_text += turn_text
                 break
@@ -326,6 +339,9 @@ class ChatThread(QThread):
                         "tool_call_id": tool_id,
                         "content":      output,
                     })
+                anchor = self._active_task_anchor()
+                if anchor:
+                    msgs.append({"role": "user", "content": anchor})
             else:
                 full_text += turn_text
                 break
@@ -490,16 +506,22 @@ class ChatThread(QThread):
         reason = str(inputs.get("reason") or "").strip()
         member = get_crew_member(member_id)
         if member is None:
-            return "[tool error] Unknown crew member. Use one of: scout, critic, tester, designer, archivist."
+            names = ", ".join(member.id for member in all_crew())
+            return f"[tool error] Unknown crew member. Use one of: {names}."
         if not crew_enabled(self._crew_settings, member):
             return f"[tool error] {member.name} is disabled in Crew settings."
         if not task:
             return "[tool error] ask_crew requires a focused task."
+        if self._crew_calls >= _MAX_CREW_CALLS_PER_TURN:
+            return "[tool error] Crew is limited to two focused calls per turn. Synthesize with the information already gathered."
 
         meta = crew_metadata(member, self._crew_settings)
+        self._crew_calls += 1
         meta["reason"] = reason
         meta["invocation_id"] = uuid4().hex
         self.crew_started.emit(meta)
+        if member.id == "archivist":
+            return self._execute_archivist_lookup(member, meta, task)
         model = str(meta.get("model") or "")
         model = crew_model_choice(
             member,
@@ -507,7 +529,7 @@ class ChatThread(QThread):
             {member.id: model},
             self._configured_providers,
         )
-        crew_history = list(self.history)
+        crew_history = crew_context_window(self.history)
         crew_history.append({
             "role": "user",
             "content": _crew_task_content(member.name, task, reason),
@@ -547,6 +569,20 @@ class ChatThread(QThread):
                 self.crew_error.emit(meta, message)
             return message
 
+    def _execute_archivist_lookup(self, member, meta: dict, task: str) -> str:
+        self.tool_called.emit("search_project_chats", {"query": task})
+        text = execute(
+            "search_project_chats",
+            {"query": task, "limit": 5},
+            self.cwd,
+            cancel=self._cancel,
+        )
+        self.tool_result.emit("search_project_chats", text)
+        if self._cancel.is_set():
+            text = text or "[cancelled]"
+        self.crew_done.emit(meta, text)
+        return f"{member.name}: {text}"
+
     def _check_tool_scope(self, name: str, inputs: dict) -> str | None:
         if self._write_roots is None or name != "edit_file":
             return None
@@ -573,6 +609,22 @@ class ChatThread(QThread):
         roots = ", ".join(str(p).replace("\\", "/") for p in allowed) or "(none)"
         return f"[tool error] edit_file is limited to: {roots}."
 
+    def _tool_results_with_active_task(self, tool_results: list[dict]) -> list[dict]:
+        anchor = self._active_task_anchor()
+        if not anchor:
+            return tool_results
+        return tool_results + [{"type": "text", "text": anchor}]
+
+    def _active_task_anchor(self) -> str:
+        task = _active_task_preview(self.history)
+        if not task:
+            return ""
+        return (
+            "Continue the active user task. Use the tool results above as evidence; "
+            "do not ask for a new task unless the active task is impossible.\n\n"
+            f"Active task: {task}"
+        )
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -586,6 +638,31 @@ def _serialize_anthropic(content) -> list:
             out.append({"type": "tool_use", "id": block.id,
                         "name": block.name, "input": dict(block.input)})
     return out
+
+
+def _active_task_preview(history: list[dict]) -> str:
+    for msg in reversed(history):
+        if msg.get("role") != "user":
+            continue
+        if msg.get("synthetic") == "tool_results":
+            continue
+        content = msg.get("content", "")
+        if _is_tool_result_only(content):
+            continue
+        text = " ".join(content_preview(content).split())
+        if not text:
+            continue
+        if len(text) > _ACTIVE_TASK_PREVIEW_CHARS:
+            text = text[: _ACTIVE_TASK_PREVIEW_CHARS - 1].rstrip() + "…"
+        return text
+    return ""
+
+
+def _is_tool_result_only(content) -> bool:
+    if not isinstance(content, list):
+        return False
+    meaningful = [block for block in content if isinstance(block, dict)]
+    return bool(meaningful) and all(block.get("type") == "tool_result" for block in meaningful)
 
 
 def _crew_task_content(name: str, task: str, reason: str = "") -> str:

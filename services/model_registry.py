@@ -50,6 +50,23 @@ _BUILTIN: dict = {
 _VALID_APIS = {"anthropic", "openai-compatible"}
 
 
+def api_default_context_window(api: str) -> int:
+    """Default context size (tokens) when no provider/model override is set."""
+    if api == "anthropic":
+        return 180_000
+    return 100_000
+
+
+def _parse_context_window(value) -> int | None:
+    if value is None:
+        return None
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
+
+
 @dataclass
 class ModelConfig:
     provider_id:  str
@@ -57,6 +74,7 @@ class ModelConfig:
     base_url:     str | None  # None = SDK default
     api_key_spec: str         # env var name, "!command", or literal key
     display_name: str
+    context_window: int | None = None  # tokens; None = api default
 
 
 @dataclass
@@ -66,6 +84,7 @@ class ProviderConfig:
     base_url:     str | None
     api_key_spec: str
     model_ids:    list[str]
+    context_window: int | None = None
 
 
 def api_key_env_var(spec: str) -> str | None:
@@ -141,6 +160,9 @@ def _merge(builtin: dict, user: dict) -> dict:
         api          = ucfg.get("api", "openai-compatible")
         api_key_spec = ucfg.get("apiKey", ucfg.get("api_key_spec", ""))
         base_url     = ucfg.get("baseUrl", ucfg.get("base_url"))
+        context_window = _parse_context_window(
+            ucfg.get("contextWindow", ucfg.get("context_window")),
+        )
         user_models  = ucfg.get("models", [])
 
         if api not in _VALID_APIS:
@@ -155,6 +177,8 @@ def _merge(builtin: dict, user: dict) -> dict:
                 existing["base_url"] = base_url
             if api != existing.get("api"):
                 existing["api"] = api
+            if context_window is not None:
+                existing["context_window"] = context_window
             if user_models:
                 existing_models = existing.get("models", [])
                 existing_by_id = {m["id"]: m for m in existing_models if "id" in m}
@@ -165,7 +189,7 @@ def _merge(builtin: dict, user: dict) -> dict:
                     if not mid or mid in seen:
                         continue
                     item = dict(existing_by_id.get(mid, {}))
-                    item.update({k: v for k, v in m.items() if v})
+                    item.update({k: v for k, v in m.items() if v is not None})
                     ordered.append(item)
                     seen.add(mid)
                 for m in existing_models:
@@ -174,12 +198,15 @@ def _merge(builtin: dict, user: dict) -> dict:
                         ordered.append(m)
                 existing["models"] = ordered
         else:
-            merged[name] = {
+            entry = {
                 "api":          api,
                 "api_key_spec": api_key_spec,
                 "base_url":     base_url,
                 "models":       user_models,
             }
+            if context_window is not None:
+                entry["context_window"] = context_window
+            merged[name] = entry
     return merged
 
 
@@ -195,6 +222,9 @@ def _build(providers: dict) -> tuple[dict, dict, dict, dict]:
         api          = pcfg.get("api", "openai-compatible")
         api_key_spec = pcfg.get("api_key_spec", "")
         base_url     = pcfg.get("base_url") or pcfg.get("baseUrl")
+        provider_window = _parse_context_window(
+            pcfg.get("context_window", pcfg.get("contextWindow")),
+        )
 
         ids: list[str] = []
         for m in pcfg.get("models", []):
@@ -206,12 +236,16 @@ def _build(providers: dict) -> tuple[dict, dict, dict, dict]:
                 )
             ids.append(mid)
             model_provider[mid] = provider_id
+            model_window = _parse_context_window(
+                m.get("contextWindow", m.get("context_window")),
+            ) or provider_window
             model_config[mid] = ModelConfig(
                 provider_id=provider_id,
                 api=api,
                 base_url=base_url,
                 api_key_spec=api_key_spec,
                 display_name=m.get("name", mid),
+                context_window=model_window,
             )
         models[provider_id] = ids
         provider_config[provider_id] = ProviderConfig(
@@ -220,6 +254,7 @@ def _build(providers: dict) -> tuple[dict, dict, dict, dict]:
             base_url=base_url,
             api_key_spec=api_key_spec,
             model_ids=ids,
+            context_window=provider_window,
         )
 
     return models, model_provider, model_config, provider_config
@@ -243,6 +278,14 @@ def get_model_config(model_id: str) -> ModelConfig:
 
 def get_provider_config(provider_id: str) -> ProviderConfig | None:
     return PROVIDERS.get(provider_id)
+
+
+def context_window_tokens(model_id: str) -> int:
+    """Context window (tokens) for a model, honoring per-model/provider overrides."""
+    cfg = get_model_config(model_id)
+    if cfg.context_window:
+        return cfg.context_window
+    return api_default_context_window(cfg.api)
 
 
 def reload() -> None:

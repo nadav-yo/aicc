@@ -14,14 +14,14 @@ def test_chat_panel_crew_helpers():
     assert scout is not None
     assert scout.id == "scout"
     assert _crew_notice_text(scout, "joined") == "Scout joined the thread."
-    assert _crew_notice_text({"id": "critic"}, "left") == "Critic left the thread."
+    assert _crew_notice_text({"id": "archivist"}, "left") == "Archivist left the thread."
     assert _first_summoned_crew(
         "@Scout check this",
         {"crew": {"scout": {"enabled": False}}},
     ) is None
     enabled = _enabled_crew({"crew": {"scout": {"enabled": False}}})
     assert "scout" not in {member.id for member in enabled}
-    assert "critic" in {member.id for member in enabled}
+    assert {member.id for member in enabled} == {"archivist"}
 
 
 def test_crew_for_history_message():
@@ -79,4 +79,12 @@ def test_tool_call_notice_includes_extension_destination(tmp_path):
     assert (
         _tool_call_notice("search_web", {"query": "release notes"}, cwd)
         == "Using tool 'search_web' with query 'release notes'"
+    )
+    assert (
+        _tool_call_notice("search_project_chats", {"query": "playwright"}, cwd)
+        == "Searching project chat history for 'playwright'"
+    )
+    assert (
+        _tool_call_notice("list_files", {"directory": "docs", "glob": "*.md"}, cwd)
+        == "Listing files in 'docs' matching '*.md'"
     )

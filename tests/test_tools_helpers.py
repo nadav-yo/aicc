@@ -2,7 +2,7 @@ import sys
 
 import pytest
 
-from config import MAX_TOOL_OUTPUT_CHARS
+from config import MAX_TOOL_OUTPUT_CHARS, MAX_TOOL_OUTPUT_LINES
 from services.tools import _literal_newline_error, _shell_command_args, _trim_output
 
 
@@ -40,4 +40,9 @@ class TestTrimOutput:
         text = "x" * (MAX_TOOL_OUTPUT_CHARS + 100)
         out = _trim_output(text)
         assert len(out) == MAX_TOOL_OUTPUT_CHARS + len("\n\n[output truncated]")
+        assert out.endswith("[output truncated]")
+
+    def test_many_lines_truncated(self):
+        text = "x\n" * (MAX_TOOL_OUTPUT_LINES + 2)
+        out = _trim_output(text)
         assert out.endswith("[output truncated]")

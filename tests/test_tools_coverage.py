@@ -1,5 +1,6 @@
 """Additional coverage for services.tools — security-critical tool execution."""
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -8,15 +9,18 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from config import MAX_TOOL_OUTPUT_CHARS, MAX_TOOL_READ_BYTES
+from config import MAX_TOOL_OUTPUT_CHARS, MAX_TOOL_OUTPUT_LINES, MAX_TOOL_READ_BYTES
 from services.tool_registry import ToolContext
 from services.tools import (
     _bash_tool_description,
     _display_path,
     _edit_file,
+    _iter_list_paths,
     _iter_search_paths,
+    _list_files,
     _read_text_limited,
     _run_shell_command,
+    _search_project_chats,
     _search_files,
     _search_files_with_rg,
     execute,
@@ -192,6 +196,12 @@ class TestBashExecution:
         out = _run_shell_command("cmd", cwd)
         assert "[output truncated]" in out
 
+    def test_truncates_too_many_output_lines(self, cwd, monkeypatch):
+        proc = self._mock_proc(["x\n"] * (MAX_TOOL_OUTPUT_LINES + 5))
+        monkeypatch.setattr("services.tools.subprocess.Popen", lambda *a, **k: proc)
+        out = _run_shell_command("cmd", cwd)
+        assert "[output truncated]" in out
+
     def test_nonzero_exit_code(self, cwd, monkeypatch):
         proc = self._mock_proc(["err\n"], returncode=2)
         monkeypatch.setattr("services.tools.subprocess.Popen", lambda *a, **k: proc)
@@ -205,6 +215,35 @@ class TestBashExecution:
 
 
 class TestSearchFiles:
+    def test_list_files_maps_workspace(self, cwd, workspace):
+        docs = workspace / "docs"
+        docs.mkdir()
+        (docs / "intro.md").write_text("# Intro\n", encoding="utf-8")
+        (docs / "api.md").write_text("# API\n", encoding="utf-8")
+
+        out = execute("list_files", {"directory": "docs", "glob": "*.md"}, cwd)
+        assert "docs" in out
+        assert "intro.md" in out
+        assert "api.md" in out
+
+    def test_list_files_recursive_skips_ignored_dirs(self, workspace):
+        cache = workspace / "__pycache__"
+        cache.mkdir()
+        (cache / "junk.py").write_text("secret", encoding="utf-8")
+        (workspace / "visible.py").write_text("secret", encoding="utf-8")
+
+        paths = list(_iter_list_paths(workspace, "*.py", recursive=True))
+        names = {p.name for p in paths}
+        assert "visible.py" in names
+        assert "junk.py" not in names
+
+    def test_list_files_limit_reports_omitted(self, cwd, workspace):
+        for idx in range(3):
+            (workspace / f"file{idx}.txt").write_text("x", encoding="utf-8")
+
+        out = _list_files(workspace, "*.txt", recursive=False, limit=2, cwd=cwd)
+        assert "[truncated: showing first 2 entries; 1 omitted]" in out
+
     def test_not_a_directory(self, cwd, workspace):
         out = execute(
             "search_files",
@@ -285,6 +324,44 @@ class TestSearchFiles:
         names = {p.name for p in paths}
         assert "visible.py" in names
         assert "junk.py" not in names
+
+
+class TestSearchProjectChats:
+    def _write_chat(self, conv_dir: Path, conv_id: str, **overrides):
+        data = {
+            "id": conv_id,
+            "title": "Project notes",
+            "created_at": "2026-01-01T10:00:00",
+            "updated_at": "2026-01-01T11:00:00",
+            "messages": [{"role": "user", "content": "we discussed playwright testing"}],
+        }
+        data.update(overrides)
+        (conv_dir / f"{conv_id}.json").write_text(json.dumps(data), encoding="utf-8")
+
+    def test_search_project_chats_finds_project_and_legacy(self, cwd, workspace, tmp_path, monkeypatch):
+        conv_dir = tmp_path / "conversations"
+        conv_dir.mkdir()
+        monkeypatch.setattr("services.tools.config.CONV_DIR", conv_dir)
+        self._write_chat(conv_dir, "project", cwd=str(workspace), title="Playwright plan")
+        self._write_chat(conv_dir, "legacy", title="Legacy note")
+        self._write_chat(
+            conv_dir,
+            "other",
+            cwd=str(tmp_path / "other"),
+            title="Other project",
+            messages=[{"role": "user", "content": "playwright elsewhere"}],
+        )
+
+        out = execute("search_project_chats", {"query": "have we discussed using playwright", "limit": 5}, cwd)
+        assert "Playwright plan" in out
+        assert "Legacy note" in out
+        assert "Other project" not in out
+        assert "legacy unscoped" in out
+
+    def test_search_project_chats_empty_and_missing(self, cwd, tmp_path, monkeypatch):
+        monkeypatch.setattr("services.tools.config.CONV_DIR", tmp_path / "missing")
+        assert "(no saved conversations)" in _search_project_chats("playwright", cwd)
+        assert "requires a query" in execute("search_project_chats", {"query": ""}, cwd)
 
 
 class TestRegistryApi:

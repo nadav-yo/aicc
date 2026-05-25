@@ -29,6 +29,7 @@ Custom providers appear automatically in the provider dropdown — no code chang
 | `baseUrl` | yes (new providers) | API base URL |
 | `apiKey` | yes | Key resolution — see below |
 | `models` | yes (new providers) | List of models to expose |
+| `contextWindow` | no | Context size in **tokens** for compaction and the usage ring (defaults: Claude 180k, OpenAI-compatible 100k) |
 
 ### API key formats
 
@@ -130,6 +131,7 @@ Ollama listens on `http://localhost:11434` by default.
       "api":     "openai-compatible",
       "baseUrl": "http://localhost:11434/v1",
       "apiKey":  "ollama",
+      "contextWindow": 32768,
       "models": [
         { "id": "llama3.1:8b",        "name": "Llama 3.1 8B" },
         { "id": "llama3.1:70b",       "name": "Llama 3.1 70B" },
@@ -144,6 +146,8 @@ Ollama listens on `http://localhost:11434` by default.
 ```
 
 No API key needed — `"ollama"` is a placeholder the server ignores.
+
+Set `contextWindow` to the size you configured in Ollama (or in **Settings → Models → Edit provider**). Without it, aicc assumes 100k like cloud OpenAI models.
 
 > **Tip:** Only list models you have already pulled. Selecting an unpulled model will return an error from the Ollama server.
 

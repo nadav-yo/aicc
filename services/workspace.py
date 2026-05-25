@@ -17,9 +17,13 @@ def agents_md(repo_path: str) -> Path | None:
 def build_system(repo_path: str, prompt: str | None = None) -> str:
     """Return the full system prompt with live workspace context appended."""
     base, agents, workspace, extensions = system_parts(repo_path, prompt)
-    parts = [base]
+    parts = [
+        base,
+        "Use the following project context silently. Do not announce that you loaded, "
+        "integrated, or reviewed these sections unless the user asks about context.",
+    ]
     if agents:
-        parts.append(f"## Project Memory (AGENTS.md)\n{agents}")
+        parts.append(f"## Project Instructions (AGENTS.md)\n{agents}")
     parts.append(f"## Workspace\n{workspace}")
     parts.append(f"## Crew\n{crew_roster_prompt()}")
     if extensions:
@@ -46,6 +50,7 @@ def _build_context(repo_path: str) -> str:
         f"Working directory: {repo_path}",
         f"Host shell: {_host_shell_name()}",
         "Tool use: call only the exact advertised tool names; never wrap tool calls in script runners or provider-specific namespaces.",
+        "Broad review: list/search first, then read targeted files in small batches; narrow the task if tool output is truncated.",
         "",
         "File tree:",
     ]

@@ -94,10 +94,12 @@ def file_blocks(content) -> list[dict]:
 
 def prepare_for_anthropic(messages: list[dict]) -> list[dict]:
     out = []
-    for msg in messages:
+    for msg in _model_context_messages(messages):
         role = msg["role"]
         content = _content_for_model(msg)
-        if role == "user" and isinstance(content, list) and _is_multimodal(content):
+        if role == "user" and isinstance(content, list) and _has_tool_result(content):
+            out.append({"role": "user", "content": content})
+        elif role == "user" and isinstance(content, list) and _is_multimodal(content):
             out.append({"role": "user", "content": _to_anthropic_blocks(content)})
         else:
             out.append({"role": role, "content": content})
@@ -106,7 +108,7 @@ def prepare_for_anthropic(messages: list[dict]) -> list[dict]:
 
 def prepare_for_openai(messages: list[dict]) -> list[dict]:
     out = []
-    for msg in messages:
+    for msg in _model_context_messages(messages):
         role = msg["role"]
         content = _content_for_model(msg)
         if role == "user" and isinstance(content, list) and _is_multimodal(content):
@@ -151,8 +153,31 @@ def _content_for_model(msg: dict):
     return content
 
 
+def _model_context_messages(messages: list[dict]) -> list[dict]:
+    return [
+        msg for idx, msg in enumerate(messages)
+        if not _is_synthesized_crew_bubble(messages, idx)
+    ]
+
+
+def _is_synthesized_crew_bubble(messages: list[dict], idx: int) -> bool:
+    msg = messages[idx]
+    if msg.get("role") != "assistant" or not isinstance(msg.get("crew"), dict):
+        return False
+    for later in messages[idx + 1:]:
+        if later.get("role") == "user":
+            return False
+        if later.get("role") == "assistant" and not isinstance(later.get("crew"), dict):
+            return True
+    return False
+
+
 def _is_multimodal(content: list) -> bool:
     return any(isinstance(b, dict) and b.get("type") in ("text", "image", "file") for b in content)
+
+
+def _has_tool_result(content: list) -> bool:
+    return any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content)
 
 
 def _to_anthropic_blocks(blocks: list[dict]) -> list[dict]:

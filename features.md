@@ -130,9 +130,9 @@ Circular progress indicator in the chat bar showing context window fill level.
 Click to open a breakdown: system prompt, rules (AGENTS.md), workspace, tools,
 skills, and messages — each with size in KB and token estimate.
 
-## [x] Project memory (AGENTS.md)
+## [x] Project instructions (AGENTS.md)
 Read `AGENTS.md` from the workspace root (OpenAI Codex / community standard).
-Injected into the system prompt under `## Project Memory (AGENTS.md)`.
+Injected into the system prompt under `## Project Instructions (AGENTS.md)`.
 Green banner shown below the top bar when active.
 
 ## [x] Auto-title via AI

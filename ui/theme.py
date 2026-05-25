@@ -13,21 +13,6 @@ _CREW_TONES = {
         "modern": ("#132832", "#2b697c", "#67e8f9"),
         "light": ("#e8f6ff", "#9ed8f4", "#0369a1"),
     },
-    "critic": {
-        "dark": ("#2d1d24", "#8c3b51", "#fb7185"),
-        "modern": ("#2c2026", "#8b4a5a", "#fda4af"),
-        "light": ("#fff1f2", "#f9a8b7", "#be123c"),
-    },
-    "tester": {
-        "dark": ("#18271e", "#2f7148", "#86efac"),
-        "modern": ("#172820", "#3a7b57", "#8ff0b4"),
-        "light": ("#ecfdf3", "#a7f3c2", "#15803d"),
-    },
-    "designer": {
-        "dark": ("#251f35", "#6d55a4", "#c4b5fd"),
-        "modern": ("#242238", "#6d5aa8", "#c4b5fd"),
-        "light": ("#f5f3ff", "#c4b5fd", "#6d28d9"),
-    },
     "archivist": {
         "dark": ("#282415", "#806c27", "#facc15"),
         "modern": ("#292514", "#8b762b", "#fde047"),
@@ -560,8 +545,13 @@ def edit_bubble_style(font_pt: int | None = None) -> str:
 
 
 def apply_app_theme(app, theme: str | None = None) -> None:
+    from ui.win_caption import install_caption_sync, sync_all_windows_captions
+
+    theme_name = theme or current_theme()
     app.setFont(app_font())
-    app.setStyleSheet(build_stylesheet(theme))
+    app.setStyleSheet(build_stylesheet(theme_name))
+    install_caption_sync(app)
+    sync_all_windows_captions(app, theme_name)
 
 
 DARK_STYLE = build_stylesheet("dark")

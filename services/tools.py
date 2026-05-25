@@ -5,13 +5,20 @@ import sys
 import subprocess
 from pathlib import Path
 
-from config import IGNORED, MAX_TOOL_OUTPUT_CHARS, MAX_TOOL_READ_BYTES
+import config
+from config import IGNORED, MAX_TOOL_OUTPUT_CHARS, MAX_TOOL_OUTPUT_LINES, MAX_TOOL_READ_BYTES
 from services.tool_policy import resolve_path, validate_tool_paths
 from services.tool_registry import ToolContext, ToolRegistry, load_extensions
 
 # ── Tool schemas ──────────────────────────────────────────────────────────────
 
 _PATH_DESC = "Path inside the workspace (relative or absolute)."
+_CHAT_SEARCH_STOPWORDS = {
+    "about", "after", "again", "been", "before", "chat", "chats", "could",
+    "did", "discuss", "discussed", "does", "done", "for", "from", "had",
+    "has", "have", "history", "into", "look", "past", "please", "search",
+    "that", "the", "this", "using", "was", "were", "what", "when", "with",
+}
 
 
 def _bash_tool_description() -> str:
@@ -21,7 +28,7 @@ def _bash_tool_description() -> str:
         shell = "/bin/sh"
     return (
         f"Run a shell command ({shell}) and return stdout + stderr. "
-        "Runs on your machine with your user account."
+        "Runs on your machine with your user account. Output is capped."
     )
 
 
@@ -98,7 +105,10 @@ def execute(name: str, inputs: dict, cwd: str, on_line=None, cancel=None) -> str
 def _register_builtin_tools(registry: ToolRegistry) -> None:
     registry.tool(
         name="read_file",
-        description="Read the full contents of a file in the workspace.",
+        description=(
+            "Read one workspace file. Output is capped at 64KB; for broad tasks, "
+            "use list_files/search_files first and read targeted files in small batches."
+        ),
         input_schema={
             "type": "object",
             "properties": {
@@ -186,8 +196,43 @@ def _register_builtin_tools(registry: ToolRegistry) -> None:
         source="builtin",
     )
     registry.tool(
+        name="list_files",
+        description=(
+            "List files and directories in the workspace. Use this to map a repo or "
+            "docs folder before reading many files. Output is capped at 64KB or 2048 lines."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "directory": {
+                    "type": "string",
+                    "description": f"Directory to list (default: workspace root). {_PATH_DESC}",
+                },
+                "glob": {
+                    "type": "string",
+                    "description": "Name filter e.g. '*.md' or '*' (default: all)",
+                },
+                "recursive": {
+                    "type": "boolean",
+                    "description": "Whether to include nested paths (default: false).",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum entries to return (default 200, max 1000).",
+                },
+            },
+        },
+        execute=_execute_list_files,
+        parallel_safe=True,
+        source="builtin",
+    )
+    registry.tool(
         name="search_files",
-        description="Search for a text pattern across files in a workspace directory.",
+        description=(
+            "Search for a text pattern across workspace files. Prefer this over "
+            "reading many files when looking for APIs, docs, or examples. Output is "
+            "capped at 64KB or 2048 lines."
+        ),
         input_schema={
             "type": "object",
             "properties": {
@@ -201,6 +246,31 @@ def _register_builtin_tools(registry: ToolRegistry) -> None:
             "required": ["pattern"],
         },
         execute=_execute_search_files,
+        parallel_safe=True,
+        source="builtin",
+    )
+    registry.tool(
+        name="search_project_chats",
+        description=(
+            "Search saved aicc conversations for this project and return compact, "
+            "dated snippets. Read-only memory lookup; use only when past discussion "
+            "or decisions are relevant."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Words or phrase to search for in past chats.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum conversations to return (default 5, max 10).",
+                },
+            },
+            "required": ["query"],
+        },
+        execute=_execute_search_project_chats,
         parallel_safe=True,
         source="builtin",
     )
@@ -219,10 +289,26 @@ def _execute_bash(ctx: ToolContext, inputs: dict) -> str:
     return _run_shell_command(inputs["command"], ctx.cwd, ctx.on_line, ctx.cancel)
 
 
+def _execute_list_files(ctx: ToolContext, inputs: dict) -> str:
+    directory = resolve_path(inputs.get("directory", ctx.cwd), ctx.cwd)
+    glob = inputs.get("glob") or "*"
+    recursive = _as_bool(inputs.get("recursive", False))
+    limit = _bounded_int(inputs.get("limit"), default=200, minimum=1, maximum=1000)
+    return _list_files(directory, glob, recursive, limit, ctx.cwd)
+
+
 def _execute_search_files(ctx: ToolContext, inputs: dict) -> str:
     directory = resolve_path(inputs.get("directory", ctx.cwd), ctx.cwd)
     glob = inputs.get("glob", "*")
     return _search_files(directory, glob, inputs["pattern"], ctx.cwd)
+
+
+def _execute_search_project_chats(ctx: ToolContext, inputs: dict) -> str:
+    return _search_project_chats(
+        str(inputs.get("query") or ""),
+        ctx.cwd,
+        inputs.get("limit"),
+    )
 
 
 def _read_text_limited(path: Path, max_bytes: int) -> str:
@@ -332,6 +418,22 @@ def _edit_file(inputs: dict, cwd: str) -> str:
     )
 
 
+def _as_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().casefold() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _bounded_int(value, *, default: int, minimum: int, maximum: int) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        number = default
+    return max(minimum, min(maximum, number))
+
+
 def _literal_newline_error(label: str, text: str) -> str | None:
     if "\\n" in text and "\n" not in text:
         return (
@@ -352,12 +454,14 @@ def _run_shell_command(command: str, cwd: str, on_line=None, cancel=None) -> str
     )
     lines = []
     total_chars = 0
+    total_lines = 0
     truncated = False
     for line in proc.stdout:
         if cancel and cancel.is_set():
             proc.kill()
             break
-        if total_chars < MAX_TOOL_OUTPUT_CHARS:
+        if total_chars < MAX_TOOL_OUTPUT_CHARS and total_lines < MAX_TOOL_OUTPUT_LINES:
+            total_lines += 1
             remaining = MAX_TOOL_OUTPUT_CHARS - total_chars
             if len(line) > remaining:
                 lines.append(line[:remaining])
@@ -395,6 +499,45 @@ def _shell_command_args(command: str) -> list[str]:
     return ["/bin/sh", "-c", command]
 
 
+def _list_files(directory: Path, glob: str, recursive: bool, limit: int, cwd: str) -> str:
+    if not directory.exists():
+        return f"Directory not found: {directory}"
+    if not directory.is_dir():
+        return f"Not a directory: {directory}"
+
+    paths = sorted(
+        _iter_list_paths(directory, glob, recursive),
+        key=lambda p: (not p.is_dir(), _display_path(p, cwd).casefold()),
+    )
+    lines = []
+    for path in paths[:limit]:
+        suffix = "/" if path.is_dir() else ""
+        lines.append(f"{_display_path(path, cwd)}{suffix}")
+
+    if not lines:
+        return "(no files)"
+
+    omitted = len(paths) - len(lines)
+    text = "\n".join(lines)
+    if omitted > 0:
+        text += f"\n\n[truncated: showing first {len(lines)} entries; {omitted} omitted]"
+    return _trim_output(text)
+
+
+def _iter_list_paths(directory: Path, glob: str, recursive: bool):
+    iterator = directory.rglob(glob) if recursive else directory.glob(glob)
+    for path in iterator:
+        if path == directory:
+            continue
+        try:
+            rel_parts = path.relative_to(directory).parts
+        except ValueError:
+            continue
+        if any(part in IGNORED for part in rel_parts):
+            continue
+        yield path
+
+
 def _search_files(directory: Path, glob: str, pattern: str, cwd: str) -> str:
     if not directory.exists():
         return f"Directory not found: {directory}"
@@ -421,6 +564,123 @@ def _search_files(directory: Path, glob: str, pattern: str, cwd: str) -> str:
             lines.append(f"{_display_path(path, cwd)}: [read error: {exc}]")
 
     return _trim_output("\n".join(lines) or "(no matches)")
+
+
+def _search_project_chats(query: str, cwd: str, limit=None) -> str:
+    query = str(query or "").strip()
+    if not query:
+        return "[tool error] search_project_chats requires a query."
+    try:
+        max_results = int(limit) if limit is not None else 5
+    except (TypeError, ValueError):
+        max_results = 5
+    max_results = max(1, min(10, max_results))
+
+    conv_dir = Path(config.CONV_DIR)
+    if not conv_dir.exists():
+        return "(no saved conversations)"
+
+    cwd_path = Path(cwd).resolve()
+    matches = []
+    for path in sorted(conv_dir.glob("*.json")):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        scope = _conversation_project_scope(data, cwd_path)
+        if scope is None:
+            continue
+        snippets = _conversation_snippets(data, query)
+        title = str(data.get("title") or "Untitled")
+        title_hit = query.casefold() in title.casefold()
+        if not snippets and not title_hit:
+            continue
+        score = (4 if title_hit else 0) + len(snippets)
+        matches.append((score, str(data.get("updated_at") or ""), path, data, scope, snippets))
+
+    if not matches:
+        return f"(no matches for {query!r} in project chat history)"
+
+    matches.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    lines = [f"Found {min(len(matches), max_results)} chat match(es) for {query!r}:"]
+    for idx, (_score, _updated, path, data, scope, snippets) in enumerate(matches[:max_results], start=1):
+        title = str(data.get("title") or "Untitled")
+        updated = str(data.get("updated_at") or data.get("created_at") or "unknown date")
+        scope_note = "current project" if scope == "project" else "legacy unscoped"
+        lines.append(f"\n{idx}. {title} ({updated}, {scope_note}, id: {data.get('id') or path.stem})")
+        if snippets:
+            for snippet in snippets[:3]:
+                lines.append(f"   - {snippet}")
+        else:
+            lines.append("   - Title matched; no message snippet found.")
+    return _trim_output("\n".join(lines))
+
+
+def _conversation_project_scope(data: dict, cwd_path: Path) -> str | None:
+    saved_cwd = str(data.get("cwd") or "").strip()
+    if not saved_cwd:
+        return "legacy"
+    try:
+        if Path(saved_cwd).resolve() == cwd_path:
+            return "project"
+    except OSError:
+        return None
+    return None
+
+
+def _conversation_snippets(data: dict, query: str) -> list[str]:
+    terms = _chat_search_terms(query)
+    snippets = []
+    for msg in data.get("messages", []):
+        text = _message_text(msg.get("content", ""))
+        folded = text.casefold()
+        if not any(term in folded for term in terms):
+            continue
+        role = str(msg.get("role") or "message")
+        snippets.append(f"{role}: {_snippet(text, terms)}")
+        if len(snippets) >= 5:
+            break
+    return snippets
+
+
+def _chat_search_terms(query: str) -> list[str]:
+    terms = [
+        term.casefold()
+        for term in re.findall(r"\w+", query)
+        if len(term) >= 3 and term.casefold() not in _CHAT_SEARCH_STOPWORDS
+    ]
+    return terms or [query.casefold()]
+
+
+def _message_text(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict):
+                if block.get("type") == "text":
+                    parts.append(str(block.get("text") or ""))
+                elif block.get("type") == "image":
+                    parts.append("[image]")
+                elif "content" in block:
+                    parts.append(_message_text(block["content"]))
+        return " ".join(parts)
+    return str(content)
+
+
+def _snippet(text: str, terms: list[str], radius: int = 120) -> str:
+    compact = re.sub(r"\s+", " ", text).strip()
+    folded = compact.casefold()
+    positions = [folded.find(term) for term in terms if term and folded.find(term) >= 0]
+    if not positions:
+        return compact[: radius * 2]
+    pos = min(positions)
+    start = max(0, pos - radius)
+    end = min(len(compact), pos + radius)
+    prefix = "..." if start else ""
+    suffix = "..." if end < len(compact) else ""
+    return f"{prefix}{compact[start:end]}{suffix}"
 
 
 def _search_files_with_rg(directory: Path, glob: str, pattern: str, cwd: str) -> str | None:
@@ -476,6 +736,14 @@ def _display_path(path: Path, cwd: str) -> str:
 
 
 def _trim_output(text: str) -> str:
-    if len(text) <= MAX_TOOL_OUTPUT_CHARS:
-        return text
-    return text[:MAX_TOOL_OUTPUT_CHARS] + "\n\n[output truncated]"
+    truncated = False
+    lines = text.splitlines(keepends=True)
+    if len(lines) > MAX_TOOL_OUTPUT_LINES:
+        text = "".join(lines[:MAX_TOOL_OUTPUT_LINES])
+        truncated = True
+    if len(text) > MAX_TOOL_OUTPUT_CHARS:
+        text = text[:MAX_TOOL_OUTPUT_CHARS]
+        truncated = True
+    if truncated:
+        return text + "\n\n[output truncated]"
+    return text

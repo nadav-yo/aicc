@@ -1,9 +1,9 @@
 import json
 from dataclasses import dataclass
 
-from services.compaction import CONTEXT_WINDOWS, RESERVE_TOKENS, _estimate_tokens
+from services.compaction import RESERVE_TOKENS, _estimate_tokens
 from services.content import content_preview
-from services.model_registry import get_model_config
+from services.model_registry import context_window_tokens, get_model_config
 from services.skills import Skill
 from services.tools import tools_anthropic, tools_openai
 from services.workspace import system_parts
@@ -67,7 +67,7 @@ def analyze_context(
     active_skill: Skill | None = None,
 ) -> ContextBudget:
     api = get_model_config(model).api
-    window = CONTEXT_WINDOWS.get(api, 100_000)
+    window = context_window_tokens(model)
 
     base, agents, workspace, extensions = system_parts(cwd, custom_system or None)
     tools_json = json.dumps(

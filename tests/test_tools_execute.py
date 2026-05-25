@@ -14,7 +14,7 @@ def cwd(workspace):
 class TestRegistryFor:
     def test_builtin_tool_names(self, cwd):
         names = set(tool_names(cwd))
-        assert {"read_file", "edit_file", "bash", "search_files"} <= names
+        assert {"read_file", "edit_file", "bash", "list_files", "search_files"} <= names
 
     def test_extension_tool_merged(self, workspace_with_tool, cwd):
         cwd = str(workspace_with_tool)

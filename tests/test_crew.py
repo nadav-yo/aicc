@@ -15,8 +15,8 @@ from services.crew import (
 
 
 def test_summoned_members_by_at_name():
-    members = summoned_members("@Scout check this and @Critic review it")
-    assert [m.id for m in members] == ["scout", "critic"]
+    members = summoned_members("@Scout check this and @Archivist summarize it")
+    assert [m.id for m in members] == ["scout", "archivist"]
 
 
 def test_summoned_members_deduplicates():
@@ -26,9 +26,19 @@ def test_summoned_members_deduplicates():
 
 def test_crew_metadata_and_prompt():
     scout = all_crew()[0]
+    assert [member.id for member in all_crew()] == ["scout", "archivist"]
     assert crew_name_from_metadata(scout.metadata()) == "Scout"
-    assert crew_name_from_metadata({"id": "critic"}) == "Critic"
-    assert "@Scout" in crew_roster_prompt()
+    assert crew_name_from_metadata({"id": "archivist"}) == "Archivist"
+    archivist = all_crew()[1]
+    assert "search_project_chats" in archivist.tools
+    assert "list_files" in scout.tools
+    assert "list_files" in archivist.tools
+    roster = crew_roster_prompt()
+    assert "@Scout" in roster
+    assert "@Archivist" in roster
+    assert "@Critic" not in roster
+    assert "focused second opinion" in roster
+    assert "Usually call 0-2 members" in roster
     assert "Crew Role" in crew_system_prompt(scout, "base")
 
 

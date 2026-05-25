@@ -8,7 +8,8 @@ def test_list_builtin_avatars():
     assert "agent" in names
     assert "human" in names
     assert "crew_scout" in names
-    assert "crew_critic" in names
+    assert "crew_archivist" in names
+    assert "crew_critic" not in names
 
 
 def test_portrait_source_default(isolate_aicc_home):

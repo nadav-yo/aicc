@@ -5,7 +5,7 @@ from services.compaction import CompactionThread
 
 
 def test_title_thread_emits_done(qapp):
-    thread = TitleThread("id1", "claude-sonnet-4-6", "user", "assistant")
+    thread = TitleThread("id1", "claude-sonnet-4-6", "user")
     results = []
 
     def on_done(conv_id, title):
@@ -18,12 +18,12 @@ def test_title_thread_emits_done(qapp):
 
 
 def test_title_thread_emits_error(qapp):
-    thread = TitleThread("id2", "claude-sonnet-4-6", "u", "a")
-    errors = []
-    thread.error.connect(errors.append)
+    thread = TitleThread("id2", "claude-sonnet-4-6", "u")
+    results = []
+    thread.done.connect(lambda conv_id, title: results.append((conv_id, title)))
     with patch("services.auto_title.generate_title", side_effect=RuntimeError("api down")):
         thread.run()
-    assert errors == ["api down"]
+    assert results == [("id2", "U")]
 
 
 def test_compaction_thread_emits_done(qapp):

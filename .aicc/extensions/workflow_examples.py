@@ -1,16 +1,15 @@
-from pathlib import Path
-import subprocess
-
-
 def register(registry):
     registry.tool(
-        name="workspace_summary",
-        description="Return a compact summary of the current workspace.",
+        name="workflow_ping",
+        description=(
+            "Extension demo: return pong. Use only when the user asks to test "
+            "workflow extensions are loaded."
+        ),
         input_schema={
             "type": "object",
             "properties": {},
         },
-        execute=workspace_summary,
+        execute=workflow_ping,
         parallel_safe=True,
     )
 
@@ -29,23 +28,14 @@ def register(registry):
     registry.hook("after_tool_result", trim_noisy_search)
 
 
-def workspace_summary(ctx, inputs):
-    root = Path(ctx.cwd).resolve()
-    branch = _git_output(["git", "branch", "--show-current"], root) or "(no branch)"
-    status = _git_output(["git", "status", "--short"], root)
-    changed = len([line for line in status.splitlines() if line.strip()])
-    return "\n".join([
-        f"Workspace: {root.name}",
-        f"Path: {root}",
-        f"Branch: {branch}",
-        f"Changed files: {changed}",
-    ])
+def workflow_ping(ctx, inputs):
+    return "pong"
 
 
 def workflow_context(ctx):
     return (
-        "The /careful_review command is available, and git push is blocked "
-        "through a before_tool_call hook."
+        "The /careful_review command is available, workflow_ping is a demo tool "
+        "(returns pong), and git push is blocked through a before_tool_call hook."
     )
 
 
@@ -64,19 +54,3 @@ def trim_noisy_search(ctx):
     limit = 4000
     if len(ctx.output) > limit:
         ctx.output = ctx.output[:limit] + "\n\n[trimmed by workflow_examples.py]"
-
-
-def _git_output(args, cwd: Path):
-    try:
-        result = subprocess.run(
-            args,
-            cwd=str(cwd),
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-    except Exception:
-        return ""
-    if result.returncode != 0:
-        return ""
-    return result.stdout.strip()
