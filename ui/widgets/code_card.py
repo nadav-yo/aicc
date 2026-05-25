@@ -16,6 +16,7 @@ class ArtifactCard(QFrame):
         title: str = "",
         reason: str = "",
         show_language: bool = True,
+        max_width: int = 560,
         parent=None,
     ):
         super().__init__(parent)
@@ -23,7 +24,7 @@ class ArtifactCard(QFrame):
         self._code = code
         self._expanded = False
 
-        self.setMaximumWidth(560)
+        self.setMaximumWidth(max_width)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 9, 12, 10)

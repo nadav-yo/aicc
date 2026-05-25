@@ -8,7 +8,7 @@ from PyQt6.QtCore import pyqtSignal, Qt
 from PyQt6.QtGui import QPixmap
 
 from config import MAX_FILE_PREVIEW_BYTES
-from services.diff_html import diff_to_html
+from services.diff_html import inline_new_file_diff_to_html
 from services.git_diff import can_diff_against_head, diff_against_head
 from services.highlight import for_path, for_language
 from ui.theme import palette, mono_font, meta_font_pt
@@ -94,7 +94,7 @@ class _TextFileTab(QWidget):
 
         bar = QHBoxLayout()
         bar.setContentsMargins(8, 4, 8, 4)
-        self._diff_toggle = QCheckBox("Show diff")
+        self._diff_toggle = QCheckBox("Show changes")
         self._diff_toggle.setChecked(bool(diff_text))
         self._diff_toggle.setVisible(diff_text is not None)
         self._diff_toggle.toggled.connect(self._on_diff_toggled)
@@ -124,12 +124,19 @@ class _TextFileTab(QWidget):
         )
         self._render()
 
+    def update_content(self, content: str, diff_text: str | None):
+        self._content = content
+        self._diff_text = diff_text
+        self._diff_toggle.setChecked(bool(diff_text))
+        self._diff_toggle.setVisible(diff_text is not None)
+        self._render()
+
     def _on_diff_toggled(self, _checked: bool):
         self._render()
 
     def _render(self):
         if self._diff_toggle.isChecked() and self._diff_text:
-            self._editor.setHtml(diff_to_html(self._diff_text))
+            self._editor.setHtml(inline_new_file_diff_to_html(self._diff_text, self._content))
         else:
             self._editor.setHtml(
                 for_path(self._content, self._lang_hint)
@@ -187,17 +194,22 @@ class FileViewerPanel(QWidget):
         tab = _TextFileTab(key, content, self._repo_root, diff_text=None)
         self._add_tab_widget(key, title, tab)
 
-    def open_file(self, path: str, repo_root: str | None = None):
+    def open_file(
+        self,
+        path: str,
+        repo_root: str | None = None,
+        diff_text: str | None = None,
+    ):
         if repo_root:
             self._repo_root = repo_root
         path = os.path.abspath(path)
-        idx = self._find_tab(path)
-        if idx >= 0:
-            self._tabs.setCurrentIndex(idx)
-            return
 
         ext = os.path.splitext(path)[1].lower()
         if ext in _IMAGE_EXTS:
+            idx = self._find_tab(path)
+            if idx >= 0:
+                self._tabs.setCurrentIndex(idx)
+                return
             self._add_tab_widget(path, os.path.basename(path), _ImageViewer(path))
             return
 
@@ -206,9 +218,16 @@ class FileViewerPanel(QWidget):
         except OSError as e:
             content = f"[Could not read file: {e}]"
 
-        diff_text = None
-        if can_diff_against_head(self._repo_root, path):
+        if diff_text is None and can_diff_against_head(self._repo_root, path):
             diff_text = diff_against_head(self._repo_root, path)
+
+        idx = self._find_tab(path)
+        if idx >= 0:
+            widget = self._tabs.widget(idx)
+            if isinstance(widget, _TextFileTab):
+                widget.update_content(content, diff_text)
+            self._tabs.setCurrentIndex(idx)
+            return
 
         tab = _TextFileTab(path, content, self._repo_root, diff_text=diff_text)
         self._add_tab_widget(path, os.path.basename(path), tab)

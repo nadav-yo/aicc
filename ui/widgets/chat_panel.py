@@ -153,6 +153,7 @@ class _ScrollHost(QWidget):
 class ChatPanel(QWidget):
     saved        = pyqtSignal()
     open_code    = pyqtSignal(str, str)   # content, title
+    open_file    = pyqtSignal(str, object)
     file_written = pyqtSignal(str)
 
     def __init__(self, store: ConversationStore, cwd: str = "",
@@ -960,6 +961,11 @@ class ChatPanel(QWidget):
             run.active_terminal.finish(int(m.group(1)) if m else 0)
             run.active_terminal = None
             self._active_terminal = None
+        elif name == "edit_file" and output.startswith("[tool error]"):
+            preview = output[:200].replace("\n", " ") + ("…" if len(output) > 200 else "")
+            self._add_tool_notice(f"Tool error: {preview[len('[tool error] '):]}")
+            run.last_edit_path = ""
+            self._last_edit_path = ""
         elif name == "edit_file" and run.last_edit_path:
             self._add_file_card(run.last_edit_path)
             run.last_edit_path = ""
@@ -1216,9 +1222,19 @@ class ChatPanel(QWidget):
             content = f"[Could not read file: {e}]"
 
         def on_open(_, __):
-            self.open_code.emit(content, name)
+            self.open_file.emit(abs_path, "")
 
-        card = self._wrap_artifact(ArtifactCard("", content, on_open, name, "Edited file", show_language=False))
+        card = self._wrap_artifact(
+            ArtifactCard(
+                "",
+                content,
+                on_open,
+                name,
+                "Edited file",
+                show_language=False,
+                max_width=960,
+            )
+        )
         self.msg_layout.insertWidget(self.msg_layout.count() - 1, card)
         self._bottom()
 
@@ -1273,11 +1289,9 @@ class ChatPanel(QWidget):
 
     def _open_linked_file(self, path: str):
         abs_path = path if os.path.isabs(path) else os.path.join(self.cwd, path)
-        try:
-            content = _read_text_preview(abs_path)
-        except OSError:
+        if not os.path.isfile(abs_path):
             return
-        self.open_code.emit(content, os.path.basename(abs_path))
+        self.open_file.emit(abs_path, None)
 
     def _find_turn_user_index(self) -> int | None:
         i = len(self.history) - 1

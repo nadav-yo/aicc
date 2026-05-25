@@ -56,6 +56,7 @@ class MainWindow(QMainWindow):
         self._left.file_attach.connect(self._chat.attach_file)
         self._chat.saved.connect(self._left.refresh)
         self._chat.open_code.connect(self._open_content)
+        self._chat.open_file.connect(self._open_file)
         self._chat.file_written.connect(self._left.mark_file_touched)
         self._left.settings_changed.connect(self._apply_appearance)
 
@@ -155,8 +156,8 @@ class MainWindow(QMainWindow):
         self._chat.apply_appearance()
         self._viewer.apply_appearance()
 
-    def _open_file(self, path: str):
-        self._viewer.open_file(path, repo_root=os.getcwd())
+    def _open_file(self, path: str, diff_text: str | None = None):
+        self._viewer.open_file(path, repo_root=os.getcwd(), diff_text=diff_text)
         self._viewer.show()
         total = self._inner.height()
         self._inner.setSizes([total * 2 // 3, total // 3])

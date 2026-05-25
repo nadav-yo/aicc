@@ -20,6 +20,10 @@ from ui.widgets.git_panel import GitPanel
 from ui.widgets.settings_dialog import SettingsDialog
 
 
+def _path_key(path: str) -> str:
+    return os.path.normcase(os.path.normpath(os.path.abspath(path)))
+
+
 class _PathLabel(QLabel):
     """Workspace folder name; elides when the sidebar is narrow."""
 
@@ -150,12 +154,12 @@ class FileTree(QTreeWidget):
         abs_path = os.path.abspath(
             path if os.path.isabs(path) else os.path.join(self.root_path, path)
         )
-        self._highlighted.add(abs_path)
+        self._highlighted.add(_path_key(abs_path))
         self._apply_decorations()
 
     def _load_git_status(self):
         self._git_by_path = {
-            ch.abs_path: (ch.code, ch.label)
+            _path_key(ch.abs_path): (ch.code, ch.label)
             for ch in list_file_changes(self.root_path)
         }
 
@@ -189,7 +193,7 @@ class FileTree(QTreeWidget):
             self._apply_decorations()
 
     def _display_name(self, name: str, path: str) -> str:
-        git = self._git_by_path.get(path)
+        git = self._git_by_path.get(_path_key(path))
         if git and os.path.isfile(path):
             return f"{git[1]} {name}"
         return name
@@ -204,12 +208,12 @@ class FileTree(QTreeWidget):
                 for i in range(item.childCount()):
                     walk(item.child(i))
                 return
-            git = self._git_by_path.get(path)
+            git = self._git_by_path.get(_path_key(path))
             if git:
                 code, label = git
                 item.setForeground(0, QColor(git_status_color(code)))
                 item.setToolTip(0, f"{label} — {os.path.relpath(path, self.root_path)}")
-            elif path in self._highlighted:
+            elif _path_key(path) in self._highlighted:
                 item.setForeground(0, accent)
                 item.setToolTip(0, "")
             else:
@@ -353,3 +357,5 @@ class LeftPanel(QWidget):
         self._file_tree.mark_touched(path)
         self._file_tree._refresh_git_status()
         self._git.refresh()
+        QTimer.singleShot(250, self._file_tree.refresh)
+        QTimer.singleShot(250, self._git.refresh)

@@ -63,6 +63,7 @@ def list_file_changes(repo_path: str) -> list[GitFileChange]:
         if path.endswith("/"):
             continue
         abs_path = path if os.path.isabs(path) else os.path.join(repo_path, path)
+        abs_path = os.path.normpath(os.path.abspath(abs_path))
         if os.path.isdir(abs_path):
             continue
         changes.append(GitFileChange(code=code, label=label, rel_path=path, abs_path=abs_path))

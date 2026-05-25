@@ -1,4 +1,5 @@
 import base64
+import html
 import re
 from datetime import datetime, date
 from pathlib import PurePath
@@ -10,7 +11,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QPixmap, QAction, QGuiApplication
 
-from services.content import content_text, file_blocks, image_blocks
+from services.content import content_text, image_blocks
 from ui.avatars import avatar_label
 from ui.theme import (
     palette, chat_font_pt, bubble_label_style, composer_style, edit_bubble_style,
@@ -59,8 +60,33 @@ def _linkify_paths(html: str) -> str:
 
 
 def _to_html(text: str) -> str:
-    html = _md.markdown(text, extensions=["fenced_code", "nl2br", "tables"])
-    return f"<style>{markdown_css()}</style>{_linkify_paths(html)}"
+    body = _md.markdown(text, extensions=["fenced_code", "nl2br", "tables"])
+    return f"<style>{markdown_css()}</style>{_linkify_paths(body)}"
+
+
+_MENTION_RE = re.compile(r'@(?:"([^"]+)"|([^\s@]+))')
+
+
+def _linkify_user_text(text: str) -> str:
+    """Turn @file mentions in user messages into clickable file links."""
+    link_style = markdown_file_link_style()
+
+    def repl(match: re.Match) -> str:
+        path = (match.group(1) or match.group(2) or "").strip()
+        if not path:
+            return match.group(0)
+        href = html.escape(f"aicc-file:{path}", quote=True)
+        label = html.escape(match.group(0))
+        return f'<a href="{href}" style="{link_style}">{label}</a>'
+
+    parts: list[str] = []
+    last = 0
+    for match in _MENTION_RE.finditer(text):
+        parts.append(html.escape(text[last:match.start()]))
+        parts.append(repl(match))
+        last = match.end()
+    parts.append(html.escape(text[last:]))
+    return "".join(parts)
 
 
 def _language_from_info(info: str) -> str:
@@ -228,17 +254,10 @@ class MessageBubble(QFrame):
                 0,
                 Qt.AlignmentFlag.AlignRight if is_user else Qt.AlignmentFlag.AlignLeft,
             )
-        for file in file_blocks(content):
-            self.body.addWidget(
-                self._file_label(file),
-                0,
-                Qt.AlignmentFlag.AlignRight if is_user else Qt.AlignmentFlag.AlignLeft,
-            )
 
         text = content_text(content) if not typing else ""
         self._copy_text = text
         self.label = QLabel(text)
-        self.label.setTextFormat(Qt.TextFormat.PlainText)
         self.label.setWordWrap(True)
         self.label.setMaximumWidth(480)
         self.label.setTextInteractionFlags(
@@ -261,6 +280,11 @@ class MessageBubble(QFrame):
         if is_user:
             self.label.setStyleSheet(bubble_label_style(True))
             if text or typing:
+                if text and not typing:
+                    self.label.setTextFormat(Qt.TextFormat.RichText)
+                    self.label.setText(_linkify_user_text(text))
+                else:
+                    self.label.setTextFormat(Qt.TextFormat.PlainText)
                 self.body.addWidget(self.label, 0, Qt.AlignmentFlag.AlignRight)
             self.body.addWidget(self.edit_input, 0, Qt.AlignmentFlag.AlignRight)
         else:
@@ -305,24 +329,12 @@ class MessageBubble(QFrame):
         lbl.setStyleSheet("border-radius:8px;")
         return lbl
 
-    @staticmethod
-    def _file_label(block: dict) -> QLabel:
-        lbl = QLabel()
-        path = block.get("path", "file")
-        suffix = " (truncated)" if block.get("truncated") else ""
-        lbl.setText(f"Attached file: {path}{suffix}")
-        p = palette()
-        lbl.setStyleSheet(
-            f"background:{p['BG3']}; color:{p['TEXT_DIM']};"
-            f"border:1px solid {p['BORDER']}; border-radius:8px; padding:6px 8px;"
-        )
-        return lbl
-
     def _start_edit(self):
         if self._typing or self._editing or not self._is_user:
             return
         self._editing = True
         self.label.hide()
+        self.label.setTextFormat(Qt.TextFormat.PlainText)
         self.edit_input.setPlainText(self._copy_text)
         self.edit_input.show()
         self.edit_input.setFocus()
@@ -334,6 +346,13 @@ class MessageBubble(QFrame):
         self._editing = False
         if text and text != self._copy_text:
             self.edit_resend_requested.emit(self._history_index, text)
+        elif text:
+            self._show_user_text(text)
+
+    def _show_user_text(self, text: str):
+        self._copy_text = text
+        self.label.setTextFormat(Qt.TextFormat.RichText)
+        self.label.setText(_linkify_user_text(text))
 
     def _cancel_edit(self):
         self.edit_input.hide()
@@ -387,11 +406,16 @@ class MessageBubble(QFrame):
 
     def apply_appearance(self):
         fs = chat_font_pt()
-        self.label.setStyleSheet(bubble_label_style(self._is_user, fs))
         self.edit_input.setStyleSheet(edit_bubble_style(fs))
         if self._timestamp_lbl:
             self._timestamp_lbl.setStyleSheet(timestamp_style())
-        if self._md_source and not self._is_user:
+        if self._is_user:
+            self.label.setStyleSheet(bubble_label_style(True, fs))
+            if self._copy_text and not self._typing and not self._editing:
+                self._show_user_text(self._copy_text)
+            return
+        self.label.setStyleSheet(bubble_label_style(False, fs))
+        if self._md_source:
             self.label.setTextFormat(Qt.TextFormat.RichText)
             self.label.setText(_to_html(self._md_source))
 

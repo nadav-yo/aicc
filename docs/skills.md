@@ -32,3 +32,13 @@ bugs, edge cases, and one concrete fix per issue. Do not edit files unless asked
 Valid tool names: `read_file`, `edit_file`, `bash`, `search_files`.
 
 The body (after the closing `---`) is the skill system prompt for the selected turn.
+
+### Usage Example
+
+To use a skill, simply type `/` followed by the name of the skill (e.g., `/review`) into the composer box. This will activate the skill's context prompt and available tools for that turn.
+
+**Example Interaction:**
+1. User: `/review`
+2. AICC: "Initializing code review mode. Please provide the file or code block you would like me to review."
+3. User: "Can you check `main.py` for common anti-patterns?"
+4. AICC: (Uses `read_file` tool on `main.py` and processes the review based on the skill's system prompt.)
