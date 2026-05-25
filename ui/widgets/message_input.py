@@ -32,6 +32,7 @@ class MessageInput(QTextEdit):
         self._in_slash_mode = False
         self._in_mention_mode = False
         self._mention_start = -1
+        self._enter_to_send = False
         self._apply_style()
         self.textChanged.connect(self._on_text_changed)
 
@@ -43,6 +44,9 @@ class MessageInput(QTextEdit):
 
     def apply_appearance(self):
         self.setStyleSheet(composer_style())
+
+    def set_enter_to_send(self, enabled: bool):
+        self._enter_to_send = enabled
 
     def _on_text_changed(self):
         text = self.toPlainText()
@@ -147,7 +151,13 @@ class MessageInput(QTextEdit):
 
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             mods = event.modifiers()
-            if mods & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier):
+            if self._enter_to_send:
+                should_send = not bool(mods & Qt.KeyboardModifier.ShiftModifier)
+            else:
+                should_send = bool(
+                    mods & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier)
+                )
+            if should_send:
                 event.accept()
                 self.send_requested.emit()
                 return
@@ -305,6 +315,9 @@ class ComposerWidget(QWidget):
 
     def apply_font_size(self, font_pt: int | None = None):
         self.input.apply_font_size(font_pt)
+
+    def set_enter_to_send(self, enabled: bool):
+        self.input.set_enter_to_send(enabled)
 
     def set_skill(self, skill) -> None:
         self._active_skill = skill

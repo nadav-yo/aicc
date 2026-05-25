@@ -2,15 +2,19 @@ import os
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QTabWidget, QTreeWidget, QTreeWidgetItem,
-    QPushButton, QHBoxLayout, QLabel, QMenu, QSizePolicy,
+    QPushButton, QHBoxLayout, QLabel, QMenu, QSizePolicy, QStyleFactory,
 )
-from PyQt6.QtCore import pyqtSignal, Qt, QFileSystemWatcher
+from PyQt6.QtCore import pyqtSignal, Qt, QFileSystemWatcher, QTimer
 from PyQt6.QtGui import QColor, QAction
 
 from config import IGNORED, MAX_TREE_ENTRIES_PER_DIR
+from services.git_status import list_file_changes
 from storage.repository import ConversationStore
 from storage.settings import SettingsStore
-from ui.theme import palette, ACCENT, icon_button_style, files_header_style
+from ui.theme import (
+    palette, ACCENT, git_status_color, icon_button_style, files_header_style,
+    file_tree_sidebar_style, mono_font_pt, mono_font,
+)
 from ui.widgets.conversation_panel import ConversationPanel
 from ui.widgets.git_panel import GitPanel
 from ui.widgets.settings_dialog import SettingsDialog
@@ -82,9 +86,15 @@ class FileTree(QTreeWidget):
 
     def __init__(self, root_path: str, parent=None):
         super().__init__(parent)
+        self.setObjectName("fileTree")
         self.root_path = root_path
         self._highlighted: set[str] = set()
+        self._git_by_path: dict[str, tuple[str, str]] = {}
         self.setHeaderHidden(True)
+        self.setAnimated(False)
+        self.setAllColumnsShowFocus(False)
+        self.setStyle(QStyleFactory.create("Fusion"))
+        self._apply_tree_style()
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._context_menu)
         self._watcher = QFileSystemWatcher([root_path])
@@ -93,6 +103,13 @@ class FileTree(QTreeWidget):
         self._populate()
         self.expandToDepth(1)
         self.itemDoubleClicked.connect(self._on_double_click)
+        self._git_timer = QTimer(self)
+        self._git_timer.timeout.connect(self._refresh_git_status)
+        self._git_timer.start(5000)
+
+    def _apply_tree_style(self):
+        self.setFont(mono_font(mono_font_pt()))
+        self.setStyleSheet(file_tree_sidebar_style())
 
     def set_root(self, path: str):
         self.root_path = path
@@ -100,6 +117,7 @@ class FileTree(QTreeWidget):
             self._watcher.removePath(d)
         self._watcher.addPath(path)
         self._highlighted.clear()
+        self._git_by_path.clear()
         self.refresh()
 
     def _on_double_click(self, item: QTreeWidgetItem, _column: int):
@@ -133,27 +151,70 @@ class FileTree(QTreeWidget):
             path if os.path.isabs(path) else os.path.join(self.root_path, path)
         )
         self._highlighted.add(abs_path)
-        self._apply_highlights()
+        self._apply_decorations()
+
+    def _load_git_status(self):
+        self._git_by_path = {
+            ch.abs_path: (ch.code, ch.label)
+            for ch in list_file_changes(self.root_path)
+        }
+
+    def _refresh_git_status(self):
+        self._load_git_status()
+        self._update_git_labels()
+        self._apply_decorations()
 
     def _populate(self):
         self.clear()
+        self._load_git_status()
         self._fill(self.invisibleRootItem(), self.root_path)
-        self._apply_highlights()
+        self._apply_decorations()
+
+    def _update_git_labels(self):
+        def walk(item: QTreeWidgetItem):
+            path = item.data(0, Qt.ItemDataRole.UserRole)
+            if path:
+                item.setText(0, self._display_name(os.path.basename(path), path))
+            for i in range(item.childCount()):
+                walk(item.child(i))
+
+        for i in range(self.topLevelItemCount()):
+            walk(self.topLevelItem(i))
 
     def _on_item_expanded(self, item: QTreeWidgetItem):
         path = item.data(0, Qt.ItemDataRole.UserRole)
         if path and os.path.isdir(path) and self._has_placeholder(item):
             item.takeChildren()
             self._fill(item, path)
-            self._apply_highlights()
+            self._apply_decorations()
 
-    def _apply_highlights(self):
+    def _display_name(self, name: str, path: str) -> str:
+        git = self._git_by_path.get(path)
+        if git and os.path.isfile(path):
+            return f"{git[1]} {name}"
+        return name
+
+    def _apply_decorations(self):
         accent = QColor(ACCENT)
+        default = QColor(palette()["TEXT"])
 
         def walk(item: QTreeWidgetItem):
             path = item.data(0, Qt.ItemDataRole.UserRole)
-            if path and path in self._highlighted:
+            if not path:
+                for i in range(item.childCount()):
+                    walk(item.child(i))
+                return
+            git = self._git_by_path.get(path)
+            if git:
+                code, label = git
+                item.setForeground(0, QColor(git_status_color(code)))
+                item.setToolTip(0, f"{label} — {os.path.relpath(path, self.root_path)}")
+            elif path in self._highlighted:
                 item.setForeground(0, accent)
+                item.setToolTip(0, "")
+            else:
+                item.setForeground(0, default)
+                item.setToolTip(0, "")
             for i in range(item.childCount()):
                 walk(item.child(i))
 
@@ -170,7 +231,7 @@ class FileTree(QTreeWidget):
             if e.name not in IGNORED and not e.name.startswith(".")
         ]
         for e in visible[:MAX_TREE_ENTRIES_PER_DIR]:
-            item = QTreeWidgetItem([e.name])
+            item = QTreeWidgetItem([self._display_name(e.name, e.path)])
             item.setData(0, Qt.ItemDataRole.UserRole, e.path)
             parent.addChild(item)
             if e.is_dir():
@@ -194,6 +255,7 @@ class LeftPanel(QWidget):
     selected         = pyqtSignal(str)
     new_chat         = pyqtSignal()
     renamed          = pyqtSignal(str, str)
+    deleted          = pyqtSignal(str)
     file_open        = pyqtSignal(str)
     file_attach      = pyqtSignal(str)
     settings_changed = pyqtSignal()
@@ -214,6 +276,7 @@ class LeftPanel(QWidget):
         self._conv.selected.connect(self.selected)
         self._conv.new_chat.connect(self.new_chat)
         self._conv.renamed.connect(self.renamed)
+        self._conv.deleted.connect(self.deleted)
 
         self._file_tree = FileTree(root_path)
         self._file_tree.file_opened.connect(self.file_open)
@@ -242,7 +305,7 @@ class LeftPanel(QWidget):
         git_layout.addWidget(self._git_header)
         git_layout.addWidget(self._git, 1)
 
-        tabs.addTab(self._conv, "History")
+        tabs.addTab(self._conv, "Chats")
         tabs.addTab(files_wrap, "Files")
         tabs.addTab(git_wrap, "Git")
 
@@ -269,6 +332,8 @@ class LeftPanel(QWidget):
     def apply_appearance(self):
         self._apply_styles()
         self._conv.apply_appearance()
+        self._file_tree._apply_tree_style()
+        self._file_tree._refresh_git_status()
         self._git.apply_appearance()
 
     def open_settings(self):
@@ -286,5 +351,5 @@ class LeftPanel(QWidget):
 
     def mark_file_touched(self, path: str):
         self._file_tree.mark_touched(path)
-        self._file_tree.refresh()
+        self._file_tree._refresh_git_status()
         self._git.refresh()

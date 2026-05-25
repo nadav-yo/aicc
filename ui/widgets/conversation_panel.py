@@ -1,4 +1,5 @@
 from datetime import datetime, date
+from pathlib import Path
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
@@ -189,6 +190,7 @@ class ConversationPanel(QWidget):
     selected = pyqtSignal(str)
     new_chat = pyqtSignal()
     renamed  = pyqtSignal(str, str)  # conv_id, title
+    deleted  = pyqtSignal(str)       # conv_id
 
     def __init__(self, store: ConversationStore, parent=None):
         super().__init__(parent)
@@ -289,7 +291,12 @@ class ConversationPanel(QWidget):
         self.list.setVisible(not show_empty)
 
     def _delete(self, path: str):
+        try:
+            conv_id = self.store.load(path)["id"]
+        except Exception:
+            conv_id = Path(path).stem
         self.store.delete(path)
+        self.deleted.emit(conv_id)
         self.refresh()
 
     def _on_edit_started(self, item: ConversationItem):

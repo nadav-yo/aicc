@@ -58,7 +58,7 @@ Omit `api` and `models` to only override `baseUrl` or `apiKey` on `claude` / `op
 
 ### Google Gemini
 
-Google exposes an OpenAI-compatible endpoint for all Gemini models.
+Google exposes an OpenAI-compatible endpoint for all Gemini models. See [current model IDs](https://ai.google.dev/gemini-api/docs/models) — Gemini 2.0 is deprecated; prefer 3.x.
 
 Get an API key at [aistudio.google.com](https://aistudio.google.com).
 
@@ -70,10 +70,10 @@ Get an API key at [aistudio.google.com](https://aistudio.google.com).
       "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai/",
       "apiKey":  "GEMINI_API_KEY",
       "models": [
-        { "id": "gemini-2.5-pro",      "name": "Gemini 2.5 Pro" },
-        { "id": "gemini-2.5-flash",    "name": "Gemini 2.5 Flash" },
-        { "id": "gemini-2.0-flash",    "name": "Gemini 2.0 Flash" },
-        { "id": "gemini-2.0-flash-lite","name": "Gemini 2.0 Flash Lite" }
+        { "id": "gemini-3.5-flash",         "name": "Gemini 3.5 Flash" },
+        { "id": "gemini-3.1-pro-preview",   "name": "Gemini 3.1 Pro" },
+        { "id": "gemini-3-flash-preview",   "name": "Gemini 3 Flash" },
+        { "id": "gemini-3.1-flash-lite",    "name": "Gemini 3.1 Flash Lite" }
       ]
     }
   }
@@ -196,7 +196,7 @@ export DEEPSEEK_API_KEY=sk-...
         { "id": "meta-llama/llama-3.3-70b-instruct", "name": "Llama 3.3 70B" },
         { "id": "mistralai/mistral-large",            "name": "Mistral Large" },
         { "id": "qwen/qwen-2.5-coder-32b-instruct",  "name": "Qwen 2.5 Coder 32B" },
-        { "id": "google/gemini-2.5-pro",              "name": "Gemini 2.5 Pro (OR)" }
+        { "id": "google/gemini-3.1-pro-preview",      "name": "Gemini 3.1 Pro (OR)" }
       ]
     }
   }
@@ -242,7 +242,7 @@ Use `!command` to fetch keys at runtime instead of storing them in env vars:
       "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai/",
       "apiKey":  "!op read op://Personal/Gemini/credential",
       "models": [
-        { "id": "gemini-2.5-flash", "name": "Gemini 2.5 Flash" }
+        { "id": "gemini-3.5-flash", "name": "Gemini 3.5 Flash" }
       ]
     }
   }
@@ -265,8 +265,8 @@ A `~/.aicc/models.json` combining multiple providers:
       "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai/",
       "apiKey":  "GEMINI_API_KEY",
       "models": [
-        { "id": "gemini-2.5-pro",   "name": "Gemini 2.5 Pro" },
-        { "id": "gemini-2.5-flash", "name": "Gemini 2.5 Flash" }
+        { "id": "gemini-3.5-flash",       "name": "Gemini 3.5 Flash" },
+        { "id": "gemini-3.1-pro-preview", "name": "Gemini 3.1 Pro" }
       ]
     },
     "ollama": {

@@ -10,7 +10,7 @@ from services.model_registry import get_model_config, resolve_api_key
 # Fast, cheap models to use for title generation; keyed by api type.
 _TITLE_MODELS: dict[str, str] = {
     "anthropic":         "claude-haiku-4-5-20251001",
-    "openai-compatible": "gpt-4.1-mini",
+    "openai-compatible": "gpt-5.4-nano",
 }
 
 TITLE_PROMPT = """\

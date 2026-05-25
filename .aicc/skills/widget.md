@@ -1,7 +1,7 @@
 ---
 name: widget
 description: Add or edit a PyQt6 widget in this project
-tools: [read_file, write_file, search_files]
+tools: [read_file, edit_file, search_files]
 ---
 You are working inside the aicc PyQt6 desktop app (this repository).
 

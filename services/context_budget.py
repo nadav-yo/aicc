@@ -1,11 +1,11 @@
 import json
 from dataclasses import dataclass
 
-from config import MODEL_PROVIDER
 from services.compaction import CONTEXT_WINDOWS, RESERVE_TOKENS, _estimate_tokens
 from services.content import content_preview
+from services.model_registry import get_model_config
 from services.skills import Skill
-from services.tools import TOOLS_ANTHROPIC, TOOLS_OPENAI
+from services.tools import tools_anthropic, tools_openai
 from services.workspace import system_parts
 
 
@@ -66,12 +66,12 @@ def analyze_context(
     custom_system: str = "",
     active_skill: Skill | None = None,
 ) -> ContextBudget:
-    provider = MODEL_PROVIDER.get(model, "openai")
-    window = CONTEXT_WINDOWS.get(provider, 100_000)
+    api = get_model_config(model).api
+    window = CONTEXT_WINDOWS.get(api, 100_000)
 
     base, agents, workspace = system_parts(cwd, custom_system or None)
     tools_json = json.dumps(
-        TOOLS_ANTHROPIC if provider == "claude" else TOOLS_OPENAI,
+        tools_anthropic() if api == "anthropic" else tools_openai(),
         ensure_ascii=False,
     )
 

@@ -1,6 +1,7 @@
 import base64
 import re
 from datetime import datetime, date
+from pathlib import PurePath
 
 import markdown as _md
 from PyQt6.QtWidgets import (
@@ -16,7 +17,31 @@ from ui.theme import (
     markdown_css, markdown_file_link_style, timestamp_style,
 )
 
-_CODE_RE = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
+_CODE_RE = re.compile(r"```([^\n`]*)\n(.*?)```", re.DOTALL)
+_FILE_RE = re.compile(
+    r"(?P<path>[\w./\\-]+\.(?:py|md|json|yaml|yml|toml|sh|js|ts|tsx|jsx|css|html|txt|rs|go|java|c|cpp|h|hpp|cs|php|rb|swift|kt|sql|xml))",
+    re.IGNORECASE,
+)
+_GENERIC_LANGS = {"", "text", "txt", "plain", "bash", "sh", "shell", "console", "terminal"}
+_EXT_LANG = {
+    ".py": "python",
+    ".md": "markdown",
+    ".js": "javascript",
+    ".jsx": "jsx",
+    ".ts": "typescript",
+    ".tsx": "tsx",
+    ".css": "css",
+    ".html": "html",
+    ".json": "json",
+    ".yaml": "yaml",
+    ".yml": "yaml",
+    ".toml": "toml",
+    ".rs": "rust",
+    ".go": "go",
+    ".sh": "bash",
+    ".sql": "sql",
+    ".xml": "xml",
+}
 _PATH_RE  = re.compile(
     r"<code>([^<]*?(?:/[^<]*?\.(?:py|md|json|yaml|yml|toml|sh|js|ts|tsx|jsx|css|html|txt))[^<]*?)</code>"
 )
@@ -34,8 +59,100 @@ def _linkify_paths(html: str) -> str:
 
 
 def _to_html(text: str) -> str:
-    html = _md.markdown(text, extensions=["nl2br", "tables"])
+    html = _md.markdown(text, extensions=["fenced_code", "nl2br", "tables"])
     return f"<style>{markdown_css()}</style>{_linkify_paths(html)}"
+
+
+def _language_from_info(info: str) -> str:
+    first = (info.strip().split() or [""])[0].strip()
+    if not first or "=" in first or "." in first or "/" in first or "\\" in first:
+        return ""
+    return first
+
+
+def _filename_from_info(info: str) -> str:
+    match = _FILE_RE.search(info)
+    return match.group("path") if match else ""
+
+
+def _filename_nearby(text: str) -> str:
+    tail = text[-220:]
+    matches = list(_FILE_RE.finditer(tail))
+    if not matches:
+        return ""
+    return matches[-1].group("path")
+
+
+def _display_path(path: str) -> str:
+    normalized = path.replace("\\", "/").strip()
+    if normalized.startswith("./"):
+        normalized = normalized[2:]
+    if normalized and not re.match(r"^[A-Za-z]:/", normalized):
+        return normalized
+    try:
+        name = PurePath(normalized).name
+    except Exception:
+        name = path
+    return name or path
+
+
+def _language_from_filename(path: str) -> str:
+    suffix = PurePath(path.replace("\\", "/")).suffix.lower()
+    return _EXT_LANG.get(suffix, "")
+
+
+def _artifact_for_block(info: str, code: str, before: str) -> dict | None:
+    lang = _language_from_info(info)
+    filename = _filename_from_info(info)
+    reason = ""
+    line_count = len(code.splitlines())
+
+    if filename:
+        lang = lang or _language_from_filename(filename)
+        title = _display_path(filename)
+        reason = "Extracted because the code fence is labeled as a file."
+    else:
+        nearby = _filename_nearby(before)
+        if nearby:
+            filename = nearby
+            lang = lang or _language_from_filename(nearby)
+            title = _display_path(nearby)
+            reason = "Extracted because the surrounding text names this file."
+        elif line_count >= 80 or len(code) >= 4000:
+            label = lang.upper() if lang else "Large"
+            title = f"{label} block"
+            reason = f"Extracted because it is {line_count} lines long."
+        else:
+            return None
+
+    if lang.lower() in _GENERIC_LANGS and not filename and line_count < 80:
+        return None
+
+    return {
+        "language": lang,
+        "code": code,
+        "title": title,
+        "reason": reason,
+    }
+
+
+def _extract_artifacts(text: str) -> tuple[str, list[dict]]:
+    artifacts: list[dict] = []
+    parts: list[str] = []
+    pos = 0
+    for match in _CODE_RE.finditer(text):
+        info = match.group(1).strip()
+        code = match.group(2)
+        before = text[:match.start()]
+        artifact = _artifact_for_block(info, code, before)
+        parts.append(text[pos:match.start()])
+        if artifact:
+            artifacts.append(artifact)
+        else:
+            parts.append(match.group(0))
+        pos = match.end()
+    parts.append(text[pos:])
+    return "".join(parts).strip(), artifacts
 
 
 def format_timestamp(iso: str) -> str:
@@ -246,23 +363,27 @@ class MessageBubble(QFrame):
         return self._typing and not self._copy_text
 
     def finalize(self, full_text: str, on_artifact=None):
-        """Render markdown and extract code blocks as artifact cards."""
+        """Render assistant markdown, including fenced code, inside the bubble."""
         if self._is_user:
             return
-        blocks = _CODE_RE.findall(full_text) if on_artifact else []
-        clean  = _CODE_RE.sub("", full_text).strip() if blocks else full_text.strip()
-        self._copy_text = clean or full_text
-        self._md_source = clean or None
+        source = full_text.strip()
+        rendered = source
+        artifacts: list[dict] = []
+        if source and on_artifact:
+            rendered, artifacts = _extract_artifacts(source)
 
-        if clean:
+        self._copy_text = rendered or source or full_text
+        self._md_source = rendered or None
+
+        if rendered:
             self.label.setTextFormat(Qt.TextFormat.RichText)
-            self.label.setText(_to_html(clean))
+            self.label.setText(_to_html(rendered))
         else:
             self.label.hide()
 
         if on_artifact:
-            for lang, code in blocks:
-                on_artifact(lang.strip(), code)
+            for artifact in artifacts:
+                on_artifact(artifact)
 
     def apply_appearance(self):
         fs = chat_font_pt()

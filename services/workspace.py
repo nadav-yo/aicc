@@ -39,6 +39,7 @@ def _build_context(repo_path: str) -> str:
     lines = [
         f"Working directory: {repo_path}",
         f"Host shell: {_host_shell_name()}",
+        "Tool use: call only the exact advertised tool names; never wrap tool calls in script runners or provider-specific namespaces.",
         "",
         "File tree:",
     ]

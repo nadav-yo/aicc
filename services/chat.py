@@ -10,7 +10,8 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from services.model_registry import get_model_config, resolve_api_key
 from services.content import prepare_for_anthropic, prepare_for_openai
-from services.tools import TOOLS_ANTHROPIC, TOOLS_OPENAI, execute
+from services.tool_policy import ConversationToolPolicy, ToolApprovalBus
+from services.tools import tools_anthropic, tools_openai, execute
 
 _PARALLEL_SAFE = frozenset({"read_file", "search_files"})
 _MAX_PARALLEL = 8
@@ -31,7 +32,9 @@ class ChatThread(QThread):
     error       = pyqtSignal(str)
 
     def __init__(self, model: str, history: list, system: str, cwd: str,
-                 allowed_tools: list[str] | None = None):
+                 allowed_tools: list[str] | None = None,
+                 tool_policy: ConversationToolPolicy | None = None,
+                 approval_bus: ToolApprovalBus | None = None):
         super().__init__()
         self.model          = model
         self._model_cfg     = get_model_config(model)
@@ -41,21 +44,27 @@ class ChatThread(QThread):
         self.cwd            = cwd
         self._cancel        = threading.Event()
         self._allowed_tools = allowed_tools
+        self._tool_policy   = tool_policy or ConversationToolPolicy()
+        self._approval_bus  = approval_bus
         self._chunk_buffer: list[str] = []
         self._last_chunk_emit = 0.0
 
     def cancel(self):
         self._cancel.set()
+        if self._approval_bus:
+            self._approval_bus.cancel_wait()
 
     def _tools_anthropic(self) -> list:
+        tools = tools_anthropic()
         if self._allowed_tools is None:
-            return TOOLS_ANTHROPIC
-        return [t for t in TOOLS_ANTHROPIC if t["name"] in self._allowed_tools]
+            return tools
+        return [t for t in tools if t["name"] in self._allowed_tools]
 
     def _tools_openai(self) -> list:
+        tools = tools_openai()
         if self._allowed_tools is None:
-            return TOOLS_OPENAI
-        return [t for t in TOOLS_OPENAI if t["function"]["name"] in self._allowed_tools]
+            return tools
+        return [t for t in tools if t["function"]["name"] in self._allowed_tools]
 
     def run(self):
         try:
@@ -251,6 +260,10 @@ class ChatThread(QThread):
         return results  # type: list[tuple[str, str, str]]
 
     def _execute_one(self, tool_id: str, name: str, inputs: dict) -> tuple[str, str, str]:
+        blocked = self._check_tool_gate(name, inputs)
+        if blocked:
+            self.tool_result.emit(name, blocked)
+            return tool_id, name, blocked
         self.tool_called.emit(name, inputs)
         on_line = (lambda line: self.bash_line.emit(line)) if name == "bash" else None
         output = execute(name, inputs, self.cwd, on_line=on_line, cancel=self._cancel)
@@ -260,14 +273,15 @@ class ChatThread(QThread):
     def _execute_parallel_batch(
         self, batch: list[tuple[str, str, dict]],
     ) -> list[tuple[str, str, str]]:
-        for _, name, inputs in batch:
-            self.tool_called.emit(name, inputs)
-
         indexed: list[tuple[int, str, str, str]] = []
 
         def run(idx: int, tool_id: str, name: str, inputs: dict):
             if self._cancel.is_set():
                 return idx, tool_id, name, "[cancelled]"
+            blocked = self._check_tool_gate(name, inputs)
+            if blocked:
+                return idx, tool_id, name, blocked
+            self.tool_called.emit(name, inputs)
             output = execute(name, inputs, self.cwd, cancel=self._cancel)
             return idx, tool_id, name, output
 
@@ -284,6 +298,13 @@ class ChatThread(QThread):
         for _, name, output in results:
             self.tool_result.emit(name, output)
         return results
+
+    def _check_tool_gate(self, name: str, inputs: dict) -> str | None:
+        if not self._approval_bus:
+            return None
+        return self._approval_bus.check(
+            name, inputs, self.cwd, self._tool_policy, self._cancel.is_set,
+        )
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

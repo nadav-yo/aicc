@@ -6,109 +6,174 @@ import subprocess
 from pathlib import Path
 
 from config import IGNORED, MAX_TOOL_OUTPUT_CHARS, MAX_TOOL_READ_BYTES
+from services.tool_policy import resolve_path, validate_tool_paths
 
 # ── Tool schemas ──────────────────────────────────────────────────────────────
 
-TOOLS_ANTHROPIC = [
-    {
-        "name": "read_file",
-        "description": "Read the full contents of a file.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "Absolute or repo-relative path"},
-            },
-            "required": ["path"],
-        },
-    },
-    {
-        "name": "write_file",
-        "description": "Write (or overwrite) a file with the given content.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "path":    {"type": "string"},
-                "content": {"type": "string"},
-            },
-            "required": ["path", "content"],
-        },
-    },
-    {
-        "name": "bash",
-        "description": (
-            "Run a host shell command and return stdout + stderr. "
-            "On Windows, commands run in PowerShell. On macOS/Linux, commands run in /bin/sh. "
-            "Keep commands short and safe."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "command": {"type": "string"},
-            },
-            "required": ["command"],
-        },
-    },
-    {
-        "name": "search_files",
-        "description": "Search for a text pattern across files in a directory.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "pattern":   {"type": "string", "description": "Text or basic regex to find"},
-                "directory": {"type": "string", "description": "Directory to search (default: cwd)"},
-                "glob":      {"type": "string", "description": "File filter e.g. '*.py' (default: all)"},
-            },
-            "required": ["pattern"],
-        },
-    },
-]
+_PATH_DESC = "Path inside the workspace (relative or absolute)."
+_TOOL_NAMES = ("read_file", "edit_file", "bash", "search_files")
 
-# OpenAI wraps the same schema in a function envelope
-TOOLS_OPENAI = [
-    {
-        "type": "function",
-        "function": {
-            "name":        t["name"],
-            "description": t["description"],
-            "parameters":  t["input_schema"],
+
+def _bash_tool_description() -> str:
+    if sys.platform == "win32":
+        shell = "PowerShell"
+    else:
+        shell = "/bin/sh"
+    return (
+        f"Run a shell command ({shell}) and return stdout + stderr. "
+        "Runs on your machine with your user account."
+    )
+
+
+def tools_anthropic() -> list:
+    return [
+        {
+            "name": "read_file",
+            "description": "Read the full contents of a file in the workspace.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": _PATH_DESC},
+                },
+                "required": ["path"],
+            },
         },
-    }
-    for t in TOOLS_ANTHROPIC
-]
+        {
+            "name": "edit_file",
+            "description": (
+                "Modify workspace files. Use content to create a new file, append to "
+                "add text at end-of-file, and edits[] for exact replacements. If the "
+                "user asks to change a file, call this tool; do not merely describe "
+                "the change."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": _PATH_DESC},
+                    "content": {
+                        "type": "string",
+                        "description": (
+                            "Content for creating a new file. Use only when the file does "
+                            "not exist, and do not combine with append or edits. Use "
+                            "actual newline characters, not escaped '\\n' text."
+                        ),
+                    },
+                    "append": {
+                        "type": "string",
+                        "description": (
+                            "Text to append to the end of an existing file. Include any "
+                            "wanted leading newline. Do not combine with content or edits. "
+                            "Use actual newline characters, not escaped '\\n' text."
+                        ),
+                    },
+                    "edits": {
+                        "type": "array",
+                        "description": (
+                            "One or more targeted replacements for an existing file. "
+                            "Each edit is matched against the original file, not "
+                            "incrementally. For nearby changes, merge them into one edit."
+                        ),
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "oldText": {
+                                    "type": "string",
+                                    "description": (
+                                        "Exact text to replace. It must be unique in the "
+                                        "original file and must not overlap another edit."
+                                    ),
+                                },
+                                "newText": {
+                                    "type": "string",
+                                    "description": (
+                                        "Replacement text for this targeted edit. Use "
+                                        "actual newline characters, not escaped '\\n' text."
+                                    ),
+                                },
+                            },
+                            "required": ["oldText", "newText"],
+                        },
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+        {
+            "name": "bash",
+            "description": _bash_tool_description(),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string"},
+                },
+                "required": ["command"],
+            },
+        },
+        {
+            "name": "search_files",
+            "description": "Search for a text pattern across files in a workspace directory.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "pattern":   {"type": "string", "description": "Text or basic regex to find"},
+                    "directory": {
+                        "type": "string",
+                        "description": f"Directory to search (default: workspace root). {_PATH_DESC}",
+                    },
+                    "glob":      {"type": "string", "description": "File filter e.g. '*.py' (default: all)"},
+                },
+                "required": ["pattern"],
+            },
+        },
+    ]
+
+
+def tools_openai() -> list:
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name":        t["name"],
+                "description": t["description"],
+                "parameters":  t["input_schema"],
+            },
+        }
+        for t in tools_anthropic()
+    ]
 
 
 # ── Executor ──────────────────────────────────────────────────────────────────
 
 def execute(name: str, inputs: dict, cwd: str, on_line=None, cancel=None) -> str:
     try:
+        path_err = validate_tool_paths(name, inputs, cwd)
+        if path_err:
+            return f"[tool error] {path_err}"
+
         if name == "read_file":
-            p = _resolve(inputs["path"], cwd)
+            p = resolve_path(inputs["path"], cwd)
             return _read_text_limited(p, MAX_TOOL_READ_BYTES)
 
-        elif name == "write_file":
-            p = _resolve(inputs["path"], cwd)
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(inputs["content"])
-            return f"Wrote {len(inputs['content'])} chars to {p}"
+        elif name == "edit_file":
+            return _edit_file(inputs, cwd)
 
         elif name == "bash":
             return _run_shell_command(inputs["command"], cwd, on_line, cancel)
 
         elif name == "search_files":
-            directory = _resolve(inputs.get("directory", cwd), cwd)
+            directory = resolve_path(inputs.get("directory", cwd), cwd)
             glob      = inputs.get("glob", "*")
             return _search_files(directory, glob, inputs["pattern"], cwd)
 
         else:
-            return f"Unknown tool: {name}"
+            return (
+                f"[tool error] Unknown tool: {name}. Available tools: "
+                f"{', '.join(_TOOL_NAMES)}. Call one of these exact tool names "
+                "directly; do not wrap tool calls in script runners or namespaces."
+            )
 
     except Exception as exc:
         return f"[tool error] {exc}"
-
-
-def _resolve(path: str, cwd: str) -> Path:
-    p = Path(path)
-    return p if p.is_absolute() else Path(cwd) / p
 
 
 def _read_text_limited(path: Path, max_bytes: int) -> str:
@@ -120,6 +185,111 @@ def _read_text_limited(path: Path, max_bytes: int) -> str:
     if truncated:
         text += f"\n\n[truncated: showing {max_bytes} of {size} bytes]"
     return text
+
+
+def _edit_file(inputs: dict, cwd: str) -> str:
+    path = resolve_path(inputs["path"], cwd)
+    has_content = "content" in inputs
+    has_append = "append" in inputs
+    edits = inputs.get("edits")
+
+    mode_count = int(has_content) + int(has_append) + int(edits is not None)
+    if mode_count != 1:
+        return "[tool error] edit_file requires exactly one of content, append, or edits"
+
+    if has_content:
+        content = inputs["content"]
+        if not isinstance(content, str):
+            return "[tool error] edit_file content must be a string"
+        newline_err = _literal_newline_error("content", content)
+        if newline_err:
+            return newline_err
+        if path.exists():
+            return f"[tool error] File already exists: {_display_path(path, cwd)}"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("x", encoding="utf-8", newline="") as f:
+            f.write(content)
+        return f"Created {_display_path(path, cwd)} ({len(content)} chars)"
+
+    if has_append:
+        append = inputs["append"]
+        if not isinstance(append, str):
+            return "[tool error] edit_file append must be a string"
+        newline_err = _literal_newline_error("append", append)
+        if newline_err:
+            return newline_err
+        if not path.exists():
+            return f"[tool error] File does not exist: {_display_path(path, cwd)}"
+        if not path.is_file():
+            return f"[tool error] Not a file: {_display_path(path, cwd)}"
+        if append == "":
+            return f"[tool error] No changes made to {_display_path(path, cwd)}"
+        with path.open("a", encoding="utf-8", newline="") as f:
+            f.write(append)
+        return f"Appended {len(append)} chars to {_display_path(path, cwd)}"
+
+    if not isinstance(edits, list) or not edits:
+        return "[tool error] edit_file requires content for create or a non-empty edits array"
+    if not path.exists():
+        return f"[tool error] File does not exist: {_display_path(path, cwd)}"
+    if not path.is_file():
+        return f"[tool error] Not a file: {_display_path(path, cwd)}"
+
+    with path.open("r", encoding="utf-8", newline="") as f:
+        current = f.read()
+
+    replacements = []
+    for idx, edit in enumerate(edits):
+        if not isinstance(edit, dict):
+            return f"[tool error] edits[{idx}] must be an object"
+        old_text = edit.get("oldText")
+        new_text = edit.get("newText")
+        if not isinstance(old_text, str) or old_text == "":
+            return f"[tool error] edits[{idx}].oldText must be a non-empty string"
+        if not isinstance(new_text, str):
+            return f"[tool error] edits[{idx}].newText must be a string"
+        newline_err = _literal_newline_error(f"edits[{idx}].newText", new_text)
+        if newline_err:
+            return newline_err
+        matches = [m.start() for m in re.finditer(re.escape(old_text), current)]
+        if len(matches) != 1:
+            return (
+                f"[tool error] edits[{idx}].oldText in {_display_path(path, cwd)} "
+                f"must match exactly once; found {len(matches)}."
+            )
+        start = matches[0]
+        replacements.append((start, start + len(old_text), new_text, idx))
+
+    replacements.sort(key=lambda item: item[0])
+    for prev, cur in zip(replacements, replacements[1:]):
+        if prev[1] > cur[0]:
+            return (
+                f"[tool error] edits[{prev[3]}] and edits[{cur[3]}] overlap in "
+                f"{_display_path(path, cwd)}. Merge them into one edit."
+            )
+
+    updated = current
+    for start, end, new_text, _ in reversed(replacements):
+        updated = updated[:start] + new_text + updated[end:]
+    if updated == current:
+        return f"[tool error] No changes made to {_display_path(path, cwd)}"
+
+    with path.open("w", encoding="utf-8", newline="") as f:
+        f.write(updated)
+    delta = len(updated) - len(current)
+    return (
+        f"Edited {_display_path(path, cwd)}: {len(replacements)} replacement(s), "
+        f"{delta:+d} chars"
+    )
+
+
+def _literal_newline_error(label: str, text: str) -> str | None:
+    if "\\n" in text and "\n" not in text:
+        return (
+            f"[tool error] edit_file {label} contains literal '\\n' text. "
+            "Use actual newline characters in the JSON string."
+        )
+    return None
 
 
 def _run_shell_command(command: str, cwd: str, on_line=None, cancel=None) -> str:
@@ -251,7 +421,7 @@ def _iter_search_paths(directory: Path, glob: str):
 
 def _display_path(path: Path, cwd: str) -> str:
     try:
-        return str(path.relative_to(Path(cwd)))
+        return str(path.relative_to(Path(cwd).resolve()))
     except ValueError:
         return str(path)
 

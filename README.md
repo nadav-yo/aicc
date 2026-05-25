@@ -1,13 +1,10 @@
 # aicc — AI Coding Companion
 
-A desktop coding assistant built with PyQt6. Streams responses from Anthropic and OpenAI models, runs agentic tool-use loops (read, write, bash, search), and renders results with syntax highlighting and Markdown.
+A **minimal** desktop agent for the repository on your machine: chat, an approval-gated tool loop, git, and just enough UI to work in the tree—not a full IDE.
 
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)
-![PyQt6](https://img.shields.io/badge/UI-PyQt6-green)
 
----
-
-## Installation
+## Quick start
 
 ```bash
 git clone https://github.com/nadav-yo/aicc
@@ -18,147 +15,29 @@ pip install -r requirements.txt
 python main.py
 ```
 
-### API keys
+Keys can also be set in **Settings → Models**. Requires Python 3.11+, PyQt6, `anthropic`, `openai`, `markdown`, `pygments`.
 
-Set your keys before launching, or enter them in **Settings → Models**:
+## What it does
 
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-export OPENAI_API_KEY=sk-...
-```
+Open a workspace folder, pick a model, and work in one window:
 
----
+- **Chat** — streaming Markdown, vision, `@file` mentions, edit/resend, branch, queue while busy
+- **Agent** — `read_file`, `edit_file`, `bash`, `search_files`; parallel reads; you approve edits (once per chat) and each shell command
+- **Repo** — file tree, syntax-highlighted tabs, git status/diffs, `AGENTS.md` in the system prompt
+- **Context** — usage ring, breakdown, auto-compaction
+- **Extras** — `/` skills, `Cmd+K` palette, themes, export/pin/search history
 
-## Features
+Paths stay inside the workspace for read/search. Shell runs as your user—not a sandbox.
 
-### Chat
-- **Streaming** responses from Anthropic and OpenAI models
-- **Stop button** — cancel mid-stream, keeps partial response
-- **Queued messages** — draft follow-ups while the agent is still responding, with cancel controls
-- **Markdown rendering** — prose, tables, inline code in bubbles
-- **Image / vision input** — paste or drag images into the composer
-- **File mentions** — attach workspace files with `@path` autocomplete
-- **Edit & resend** — double-click any user bubble to edit it
-- **Regenerate** — re-run the last assistant turn
-- **Branch from message** — fork the conversation at any point
+## Documentation
 
-### Agentic tools
-The model can call tools in a loop until the task is done:
-
-| Tool | What it does |
+| Topic | |
 |---|---|
-| `read_file` | Read a file in the workspace |
-| `write_file` | Create or overwrite a file |
-| `bash` | Run a host shell command (PowerShell on Windows, `/bin/sh` elsewhere) |
-| `search_files` | Search files with `rg` when available, with a Python fallback |
+| Custom providers (Gemini, Ollama, …) | [docs/custom-models.md](docs/custom-models.md) |
+| Slash-command skills | [docs/skills.md](docs/skills.md) |
+| Settings file | [docs/configuration.md](docs/configuration.md) |
+| Feature backlog | [features.md](features.md) |
 
-Parallel tool execution — read-safe tools run concurrently.
+## License
 
-### Workspace
-- **File tree** — browse and open files; auto-refreshes on disk changes
-- **File viewer** — tabbed editor with syntax highlighting (Pygments)
-- **Git panel** — diff and status for the open repository
-- **AGENTS.md** — project memory injected into every system prompt ([AGENTS.md standard](https://agents.md/))
-
-### Context
-- **Context ring** — live fill indicator for the context window
-- **Context breakdown** — click the ring to see how tokens are distributed
-- **Auto-compaction** — summarises old messages when approaching the limit
-
-### Skills / slash commands
-Type `/` in the composer to open the skill picker. Skills are Markdown files with a YAML frontmatter that set the system prompt and restrict which tools the model can use.
-
-```
-~/.aicc/skills/review.md   ← user-global
-.aicc/skills/widget.md     ← project-local (wins on name collision)
-```
-
-See [docs/skills.md](docs/skills.md) for the file format.
-
-### UX
-- **Command palette** `Cmd+K` — fuzzy-search conversations, slash commands, files
-- **Conversation history** — search, rename, pin, export as Markdown
-- **Auto-title** — cheap background LLM call names each conversation
-- **Keyboard shortcuts** — `Cmd+N` new chat, `Cmd+Enter` send, `Esc` stop, `↑` edit last message
-- **Dark / modern / light themes** — follows system appearance, live-reloads
-
----
-
-## Custom models
-
-Use **Settings → Models → Add provider** or add `~/.aicc/models.json` to use any OpenAI-compatible endpoint — Gemini, Ollama, DeepSeek, OpenRouter, or a corporate proxy:
-
-```json
-{
-  "providers": {
-    "google": {
-      "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai/",
-      "api": "openai-compatible",
-      "apiKey": "GEMINI_API_KEY",
-      "models": [
-        { "id": "gemini-2.5-pro",   "name": "Gemini 2.5 Pro" },
-        { "id": "gemini-2.5-flash", "name": "Gemini 2.5 Flash" }
-      ]
-    }
-  }
-}
-```
-
-More examples: [docs/custom-models.md](docs/custom-models.md)
-
----
-
-## Settings
-
-`~/.aicc/settings.json` — written by the settings dialog. Keys:
-
-| Key | Description |
-|---|---|
-| `anthropic_api_key` | Fallback if `ANTHROPIC_API_KEY` env var is unset |
-| `openai_api_key` | Fallback if `OPENAI_API_KEY` env var is unset |
-| `provider_api_keys` | Per-provider API keys for built-in and custom providers |
-| `system_prompt` | Custom system prompt (overrides the default) |
-| `default_models` | Per-provider default model selection |
-| `theme` | `"dark"`, `"modern"`, or `"light"` |
-| `font_size` | Chat font size in pt |
-
----
-
-## Known Issues
-
-- Chat runs are single-active-run, not fully independent per conversation.
-- If chat A is streaming and you switch to chat B, chat A's response keeps running and saves back to chat A, but the live stream and typing indicator are not shown while chat B is visible.
-- Queued messages are isolated per chat, but they only start when their originating chat is visible.
-- Compaction is still global to the active panel and should be made conversation-bound before relying on it during chat switches.
-
----
-
-## Project layout
-
-```
-aicc/
-├── main.py                  # Entry point
-├── config.py                # Paths and constants
-├── services/
-│   ├── model_registry.py    # Loads built-ins + ~/.aicc/models.json
-│   ├── chat.py              # Streaming agentic loop (Anthropic + OpenAI)
-│   ├── tools.py             # Tool implementations
-│   ├── skills.py            # Skill file loader
-│   ├── compaction.py        # Context compaction
-│   └── workspace.py         # System prompt + AGENTS.md injection
-├── ui/
-│   ├── widgets/             # QWidget subclasses
-│   └── theme.py             # Palette, stylesheet helpers
-├── storage/                 # Conversation persistence
-├── assets/
-│   └── skills/              # Built-in skill definitions (empty — add your own)
-└── docs/                    # Extended documentation
-```
-
----
-
-## Requirements
-
-- Python 3.11+
-- PyQt6 6.11+
-- `anthropic`, `openai`, `markdown`, `pygments`
+Copyright © 2026 AI Coding Companion. [MIT License](https://opensource.org/licenses/MIT).

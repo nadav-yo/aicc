@@ -10,7 +10,9 @@ On cancel, the partial response is kept in the bubble and input is re-enabled.
 ## [x] Markdown rendering
 After streaming completes, convert the bubble text from raw markdown to HTML
 using the `markdown` library. Bold, italic, headers, lists, inline code all rendered.
-Code blocks are already extracted by `finalize()` — only prose needs conversion.
+Small fenced code blocks render inline so examples stay attached to the explanation.
+Only file-labeled or very large blocks are extracted into named, expandable cards
+with an extraction reason.
 
 ## [x] Syntax highlighting
 Use `pygments` (monokai dark theme) in the FileViewerPanel for both `open_file`
@@ -109,8 +111,14 @@ Restored on startup.
 
 **Safety & control**
 
+## [x] Tool validation
+Read/search paths must stay inside the workspace (resolved paths, symlinks followed).
+`edit_file`: one Allow per conversation for the repo; shell can still modify files other ways.
+`bash`: Run / Don't ask again (this conversation only) / Cancel; first prompt explains full user access.
+Confirmations are not a sandbox — documented in dialogs and tool descriptions.
+
 ## [ ] Undo file changes
-Track every `write_file` call during a session. "Undo last change" button in the
+Track every `edit_file` call during a session. "Undo last change" button in the
 git panel (or Cmd+Z) restores the previous file content from an in-memory snapshot.
 
 ---
@@ -129,7 +137,7 @@ Green banner shown below the top bar when active.
 
 ## [x] Auto-title via AI
 After the first assistant reply, fire a cheap background LLM call
-(`haiku` / `gpt-4.1-mini`) to generate a 5–7 word title.
+(`haiku` / `gpt-5.4-nano`) to generate a 5–7 word title.
 Replaces the current "first 50 chars of user message" fallback.
 
 ## [x] Conversation export
@@ -154,7 +162,7 @@ Cmd+K opens a fuzzy-search palette over recent conversations, slash-commands
 
 ## [ ] Task progress panel
 While the agent is in its tool-use loop, show a collapsible panel listing
-each step: ✓ read_file, ✓ bash, ⟳ write_file… Gives a live map of what
+each step: ✓ read_file, ✓ bash, ⟳ edit_file… Gives a live map of what
 the agent is doing, like Claude Code's task list.
 
 ## [x] Parallel tool execution

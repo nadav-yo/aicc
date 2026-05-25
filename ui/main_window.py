@@ -37,7 +37,7 @@ class MainWindow(QMainWindow):
 
         self._inner = QSplitter(Qt.Orientation.Vertical)
 
-        self._viewer = FileViewerPanel()
+        self._viewer = FileViewerPanel(repo)
         self._viewer.hide()
         self._viewer.all_closed.connect(self._close_file)
 
@@ -51,6 +51,7 @@ class MainWindow(QMainWindow):
         self._left.selected.connect(self._chat.load_conversation)
         self._left.new_chat.connect(self._chat.new_conversation)
         self._left.renamed.connect(self._chat.update_title)
+        self._left.deleted.connect(self._chat.on_conversation_deleted)
         self._left.file_open.connect(self._open_file)
         self._left.file_attach.connect(self._chat.attach_file)
         self._chat.saved.connect(self._left.refresh)
@@ -155,7 +156,7 @@ class MainWindow(QMainWindow):
         self._viewer.apply_appearance()
 
     def _open_file(self, path: str):
-        self._viewer.open_file(path)
+        self._viewer.open_file(path, repo_root=os.getcwd())
         self._viewer.show()
         total = self._inner.height()
         self._inner.setSizes([total * 2 // 3, total // 3])

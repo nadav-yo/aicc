@@ -30,21 +30,19 @@ _BUILTIN: dict = {
         "api": "anthropic",
         "api_key_spec": "ANTHROPIC_API_KEY",
         "models": [
-            {"id": "claude-opus-4-7"},
-            {"id": "claude-sonnet-4-6"},
-            {"id": "claude-haiku-4-5-20251001"},
+            {"id": "claude-opus-4-7", "name": "Claude Opus 4.7"},
+            {"id": "claude-sonnet-4-6", "name": "Claude Sonnet 4.6"},
+            {"id": "claude-haiku-4-5-20251001", "name": "Claude Haiku 4.5"},
         ],
     },
     "openai": {
         "api": "openai-compatible",
         "api_key_spec": "OPENAI_API_KEY",
         "models": [
-            {"id": "gpt-4.1"},
-            {"id": "gpt-4.1-mini"},
-            {"id": "gpt-4o"},
-            {"id": "gpt-4o-mini"},
-            {"id": "o3"},
-            {"id": "o4-mini"},
+            {"id": "gpt-5.5", "name": "GPT-5.5"},
+            {"id": "gpt-5.4-mini", "name": "GPT-5.4 Mini"},
+            {"id": "gpt-5.4-nano", "name": "GPT-5.4 Nano"},
+            {"id": "gpt-5.1", "name": "GPT-5.1"},
         ],
     },
 }

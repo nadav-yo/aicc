@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QTextEdit, QComboBox, QWidget, QFileDialog, QScrollArea, QSlider,
     QListWidget, QListWidgetItem, QStackedWidget, QFrame, QTableWidget,
-    QTableWidgetItem, QHeaderView, QMessageBox, QToolButton, QStyle,
+    QTableWidgetItem, QHeaderView, QMessageBox, QToolButton, QStyle, QCheckBox,
 )
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QIcon
@@ -677,8 +677,26 @@ class SettingsDialog(QDialog):
     def _page_chat(self, saved: dict) -> QWidget:
         page, layout = self._page_shell(
             "Chat",
-            "Portraits shown beside your messages and the agent's replies.",
+            "Message composer behavior and portraits.",
         )
+        p = palette()
+        check_icon = (Path(__file__).resolve().parents[2] / "assets" / "checkmark.svg").as_posix()
+        self.enter_to_send_check = QCheckBox("Enter sends message")
+        self.enter_to_send_check.setStyleSheet(
+            f"QCheckBox {{ color:{p['TEXT']}; font-size:13px; spacing:8px; }}"
+            f"QCheckBox::indicator {{ width:16px; height:16px;"
+            f"background:{p['BG3']}; border:1px solid {p['TEXT_DIM']}; border-radius:3px; }}"
+            f"QCheckBox::indicator:hover {{ border:1px solid {ACCENT}; }}"
+            f"QCheckBox::indicator:checked {{ image:url({check_icon}); border:1px solid {ACCENT}; }}"
+        )
+        layout.addWidget(self.enter_to_send_check)
+
+        enter_hint = QLabel("When enabled, Shift+Enter inserts a new line.")
+        enter_hint.setWordWrap(True)
+        enter_hint.setStyleSheet(self._hint_style)
+        layout.addWidget(enter_hint)
+        layout.addWidget(self._section_separator())
+
         self.human_portrait = _PortraitPicker(
             "human", "You", saved.get("avatar_human", "human"), self._styles,
         )
@@ -729,6 +747,8 @@ class SettingsDialog(QDialog):
         font = saved.get("font_size", DEFAULT_FONT_SIZE)
         if font in ("small", "medium", "large"):
             self.font_combo.setCurrentText(font)
+
+        self.enter_to_send_check.setChecked(bool(saved.get("enter_to_send", False)))
 
         pct = saved.get("compaction_threshold_pct", DEFAULT_COMPACTION_THRESHOLD_PCT)
         try:
@@ -781,6 +801,7 @@ class SettingsDialog(QDialog):
             "system_prompt": self.system_prompt.toPlainText().strip() or SYSTEM_PROMPT,
             "theme": self.theme_combo.currentText(),
             "font_size": self.font_combo.currentText(),
+            "enter_to_send": self.enter_to_send_check.isChecked(),
             "compaction_threshold_pct": self.compaction_slider.value(),
             "default_models": default_models,
             "avatar_human": persist_portrait(self.human_portrait.value(), "human"),

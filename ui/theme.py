@@ -106,6 +106,18 @@ def palette(theme: str | None = None) -> dict:
     return _PALETTES.get(name, _PALETTES[DEFAULT_THEME])
 
 
+def git_status_color(code: str) -> str:
+    """Foreground color for a `git status --short` two-letter code."""
+    p = palette()
+    if code in ("??", "A ", "A"):
+        return p["SUCCESS"] if code != "??" else p["TEXT_DIM"]
+    if "D" in code:
+        return "#f87171"
+    if "M" in code or "U" in code:
+        return ACCENT
+    return p["TEXT"]
+
+
 def chat_font_pt(size_name: str | None = None) -> int:
     if size_name is None:
         size_name = SettingsStore().load().get("font_size", DEFAULT_FONT_SIZE)
@@ -159,6 +171,9 @@ def markdown_css(font_pt: int | None = None, theme: str | None = None) -> str:
         "text-decoration-thickness:1px; text-underline-offset:2px; }"
         f"code {{ background:{code_bg}; border-radius:5px;"
         f"padding:2px 6px; font-family:{MONO_FONT_CSS}; font-size:{max(10, fs - 2)}px; }}"
+        f"pre {{ background:{code_bg}; border-radius:8px; padding:8px 10px;"
+        "white-space:pre-wrap; margin:6px 0; }}"
+        "pre code { background:transparent; padding:0; border-radius:0; }"
         "h1,h2,h3 { margin:8px 0 4px 0; font-weight:600; }"
         "ul,ol { margin:6px 0; padding-left:20px; }"
         "p { margin:4px 0; }"
@@ -264,6 +279,40 @@ def icon_button_style(size_px: int = 28) -> str:
         f"min-height:{size_px}px; max-height:{size_px}px; }}"
         f"QPushButton:hover {{ background:{p['BG3']}; color:{p['TEXT']}; }}"
         f"QPushButton:pressed {{ background:{p['BORDER']}; }}"
+    )
+
+
+def sidebar_section_label_style() -> str:
+    p = palette()
+    meta = meta_font_pt()
+    return f"font-size:{meta}px; color:{p['TEXT_DIM']}; padding:2px 4px;"
+
+
+def git_changes_list_style() -> str:
+    """Flat sidebar list (Git tab + Files tab changes)."""
+    p = palette()
+    sel = p["SELECTION"]
+    return (
+        f"QListWidget {{ background:{p['BG2']}; border:none; color:{p['TEXT']}; outline:none; }}"
+        f"QListWidget::item {{ padding:2px 6px; border:none; outline:none; }}"
+        f"QListWidget::item:hover {{ background:{p['BG3']}; }}"
+        f"QListWidget::item:selected {{ background:{sel}; color:{p['SELECTION_TEXT']}; }}"
+        f"QListWidget::item:selected:focus {{ background:{sel}; border:none; outline:none; }}"
+        f"QListWidget::item:focus {{ border:none; outline:none; }}"
+    )
+
+
+def file_tree_sidebar_style() -> str:
+    """File tree under the changes list — same item padding, no focus chrome."""
+    p = palette()
+    sel = p["SELECTION"]
+    return (
+        f"QTreeWidget#fileTree {{ background:{p['BG2']}; border:none; color:{p['TEXT']}; outline:none; }}"
+        f"QTreeWidget#fileTree::item {{ padding:2px 6px; border:none; outline:none; border-radius:0; }}"
+        f"QTreeWidget#fileTree::item:hover {{ background:{p['BG3']}; }}"
+        f"QTreeWidget#fileTree::item:selected {{ background:{sel}; color:{p['SELECTION_TEXT']}; }}"
+        f"QTreeWidget#fileTree::item:selected:focus {{ background:{sel}; border:none; outline:none; }}"
+        f"QTreeWidget#fileTree::item:focus {{ border:none; outline:none; }}"
     )
 
 
@@ -381,10 +430,12 @@ QTabBar::tab {{
 }}
 QTabBar::tab:selected {{ color:{p["TEXT"]}; border-bottom:2px solid {ACCENT}; font-weight:600; }}
 QTabBar::tab:hover {{ color:{p["TEXT"]}; background:{p["BG3"]}; border-radius:6px 6px 0 0; }}
-QTreeWidget      {{ background:{p["BG2"]}; border:none; font-size:{fs}px; color:{p["TEXT"]}; }}
-QTreeWidget::item {{ padding:3px 2px; border-radius:4px; }}
+QTreeWidget      {{ background:{p["BG2"]}; border:none; font-size:{fs}px; color:{p["TEXT"]}; outline:none; }}
+QTreeWidget::item {{ padding:3px 2px; border-radius:4px; border:none; outline:none; }}
 QTreeWidget::item:hover {{ background:{p["BG3"]}; }}
-QTreeWidget::item:selected {{ background:{sel}; color:{p["SELECTION_TEXT"]}; }}
+QTreeWidget::item:selected {{ background:{sel}; color:{p["SELECTION_TEXT"]}; border:none; outline:none; }}
+QTreeWidget::item:selected:focus {{ background:{sel}; color:{p["SELECTION_TEXT"]}; border:none; outline:none; }}
+QTreeWidget::item:focus {{ border:none; outline:none; }}
 QHeaderView::section {{
     background:{p["BG2"]}; color:{p["TEXT_DIM"]}; border:none;
     font-size:{meta}px; padding:6px 8px; font-weight:500;

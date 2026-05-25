@@ -1,15 +1,17 @@
 import os
 
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QTextEdit, QFrame, QTabWidget,
-    QScrollArea, QLabel, QSizePolicy,
+    QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QFrame, QTabWidget,
+    QScrollArea, QLabel, QSizePolicy, QCheckBox,
 )
 from PyQt6.QtCore import pyqtSignal, Qt
 from PyQt6.QtGui import QPixmap
 
 from config import MAX_FILE_PREVIEW_BYTES
+from services.diff_html import diff_to_html
+from services.git_diff import can_diff_against_head, diff_against_head
 from services.highlight import for_path, for_language
-from ui.theme import palette, mono_font
+from ui.theme import palette, mono_font, meta_font_pt
 
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".ico"}
 
@@ -69,11 +71,79 @@ class _ImageViewer(QScrollArea):
         self._label.setPixmap(scaled)
 
 
+class _TextFileTab(QWidget):
+    """Syntax-highlighted file view with optional git diff vs HEAD."""
+
+    def __init__(
+        self,
+        path: str,
+        content: str,
+        repo_root: str,
+        diff_text: str | None,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self._path = path
+        self._content = content
+        self._lang_hint = path
+        self._diff_text = diff_text
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        bar = QHBoxLayout()
+        bar.setContentsMargins(8, 4, 8, 4)
+        self._diff_toggle = QCheckBox("Show diff")
+        self._diff_toggle.setChecked(bool(diff_text))
+        self._diff_toggle.setVisible(diff_text is not None)
+        self._diff_toggle.toggled.connect(self._on_diff_toggled)
+        bar.addWidget(self._diff_toggle)
+        bar.addStretch(1)
+        root.addLayout(bar)
+
+        self._editor = QTextEdit()
+        self._editor.setReadOnly(True)
+        self._editor.setFrameShape(QFrame.Shape.NoFrame)
+        self._editor.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
+        root.addWidget(self._editor, 1)
+
+        self.apply_appearance()
+        self._render()
+
+    def apply_appearance(self):
+        p = palette()
+        meta = meta_font_pt()
+        self._diff_toggle.setStyleSheet(
+            f"QCheckBox {{ color:{p['TEXT_DIM']}; font-size:{meta}px; spacing:6px; }}"
+            f"QCheckBox::indicator {{ width:14px; height:14px; }}"
+        )
+        self._editor.setFont(mono_font())
+        self._editor.setStyleSheet(
+            f"QTextEdit {{ background:{p['BG3']}; color:{p['TEXT']}; border:none; }}"
+        )
+        self._render()
+
+    def _on_diff_toggled(self, _checked: bool):
+        self._render()
+
+    def _render(self):
+        if self._diff_toggle.isChecked() and self._diff_text:
+            self._editor.setHtml(diff_to_html(self._diff_text))
+        else:
+            self._editor.setHtml(
+                for_path(self._content, self._lang_hint)
+                if self._lang_hint
+                else for_language(self._content, "")
+            )
+
+
 class FileViewerPanel(QWidget):
     all_closed = pyqtSignal()
 
-    def __init__(self, parent=None):
+    def __init__(self, repo_root: str = "", parent=None):
         super().__init__(parent)
+        self._repo_root = repo_root or os.getcwd()
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -90,36 +160,16 @@ class FileViewerPanel(QWidget):
 
         root.addWidget(self._tabs)
 
-    def _editor_style(self) -> str:
-        p = palette()
-        return f"QTextEdit {{ background:{p['BG3']}; color:{p['TEXT']}; border:none; padding:12px; }}"
-
-    def _apply_editor_font(self, editor: QTextEdit):
-        editor.setFont(mono_font())
-        editor.setStyleSheet(self._editor_style())
-
-    def _make_editor(self) -> QTextEdit:
-        editor = QTextEdit()
-        editor.setReadOnly(True)
-        editor.setFrameShape(QFrame.Shape.NoFrame)
-        self._apply_editor_font(editor)
-        return editor
+    def set_repo_root(self, path: str):
+        self._repo_root = path
 
     def apply_appearance(self):
         for i in range(self._tabs.count()):
             widget = self._tabs.widget(i)
-            if isinstance(widget, QTextEdit):
-                self._apply_editor_font(widget)
-                content = widget.property("_source_content")
-                lang_hint = widget.property("_lang_hint") or ""
-                if content is not None:
-                    self._set_editor_html(widget, content, lang_hint)
+            if isinstance(widget, _TextFileTab):
+                widget.apply_appearance()
             elif isinstance(widget, _ImageViewer):
                 widget.apply_appearance()
-
-    def _set_editor_html(self, editor: QTextEdit, content: str, lang_hint: str):
-        html = for_path(content, lang_hint) if lang_hint else for_language(content, "")
-        editor.setHtml(html)
 
     def _find_tab(self, key: str) -> int:
         tab_bar = self._tabs.tabBar()
@@ -133,15 +183,13 @@ class FileViewerPanel(QWidget):
         self._tabs.tabBar().setTabData(idx, key)
         self._tabs.setCurrentIndex(idx)
 
-    def _add_text_tab(self, key: str, title: str, content: str, lang_hint: str = ""):
-        editor = self._make_editor()
-        editor.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
-        editor.setProperty("_source_content", content)
-        editor.setProperty("_lang_hint", lang_hint)
-        self._set_editor_html(editor, content, lang_hint)
-        self._add_tab_widget(key, title, editor)
+    def _add_text_tab(self, key: str, title: str, content: str):
+        tab = _TextFileTab(key, content, self._repo_root, diff_text=None)
+        self._add_tab_widget(key, title, tab)
 
-    def open_file(self, path: str):
+    def open_file(self, path: str, repo_root: str | None = None):
+        if repo_root:
+            self._repo_root = repo_root
         path = os.path.abspath(path)
         idx = self._find_tab(path)
         if idx >= 0:
@@ -157,7 +205,13 @@ class FileViewerPanel(QWidget):
             content = _read_text_preview(path)
         except OSError as e:
             content = f"[Could not read file: {e}]"
-        self._add_text_tab(path, os.path.basename(path), content, lang_hint=path)
+
+        diff_text = None
+        if can_diff_against_head(self._repo_root, path):
+            diff_text = diff_against_head(self._repo_root, path)
+
+        tab = _TextFileTab(path, content, self._repo_root, diff_text=diff_text)
+        self._add_tab_widget(path, os.path.basename(path), tab)
 
     def open_content(self, content: str, title: str):
         key = f"\0{title}"
@@ -165,7 +219,7 @@ class FileViewerPanel(QWidget):
         if idx >= 0:
             self._tabs.setCurrentIndex(idx)
             return
-        self._add_text_tab(key, title, content, lang_hint=title)
+        self._add_text_tab(key, title, content)
 
     def _on_tab_close_requested(self, index: int):
         self._tabs.removeTab(index)
