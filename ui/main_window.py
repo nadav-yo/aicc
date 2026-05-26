@@ -49,12 +49,13 @@ class MainWindow(QMainWindow):
         self._inner.setStretchFactor(1, 1)
 
         self._left.selected.connect(self._chat.load_conversation)
-        self._left.new_chat.connect(self._chat.new_conversation)
+        self._left.new_chat.connect(self._new_conversation)
         self._left.renamed.connect(self._chat.update_title)
         self._left.deleted.connect(self._chat.on_conversation_deleted)
         self._left.file_open.connect(self._open_file)
         self._left.file_attach.connect(self._chat.attach_file)
         self._chat.saved.connect(self._left.refresh)
+        self._chat.conversation_created.connect(self._left.select_conversation)
         self._chat.open_code.connect(self._open_content)
         self._chat.open_file.connect(self._open_file)
         self._chat.file_written.connect(self._left.mark_file_touched)
@@ -76,7 +77,7 @@ class MainWindow(QMainWindow):
 
         new_chat = QShortcut(QKeySequence.StandardKey.New, self)
         new_chat.setContext(ctx)
-        new_chat.activated.connect(self._chat.new_conversation)
+        new_chat.activated.connect(self._new_conversation)
 
         close_tab = QShortcut(QKeySequence.StandardKey.Close, self)
         close_tab.setContext(ctx)
@@ -102,7 +103,7 @@ class MainWindow(QMainWindow):
             is_streaming=self._chat.is_streaming,
             on_open_conversation=self._chat.load_conversation,
             on_open_file=self._open_file,
-            on_new_chat=self._chat.new_conversation,
+            on_new_chat=self._new_conversation,
             on_export=self._chat.export_conversation,
             on_compact=lambda: self._chat.compact_conversation(force=True),
             on_settings=self._left.open_settings,
@@ -110,6 +111,10 @@ class MainWindow(QMainWindow):
             on_set_model=self._chat.set_model,
         )
         CommandPalette(build_palette_items(ctx), parent=self).exec()
+
+    def _new_conversation(self):
+        self._chat.new_conversation()
+        self._left.clear_conversation_selection()
 
     def _close_viewer_tab(self):
         if self._viewer.isVisible():

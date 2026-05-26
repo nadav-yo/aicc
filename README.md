@@ -50,6 +50,7 @@ Paths stay inside the workspace for read/search. Shell runs as your user—not a
 | Topic | |
 |---|---|
 | Custom providers (Gemini, Ollama, …) | [docs/custom-models.md](docs/custom-models.md) |
+| Compaction and archiving | [docs/compact.md](docs/compact.md) |
 | Extensions and custom tools | [docs/extensions.md](docs/extensions.md) |
 | Slash-command skills | [docs/skills.md](docs/skills.md) |
 | Settings file | [docs/configuration.md](docs/configuration.md) |

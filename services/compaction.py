@@ -17,16 +17,20 @@ MIN_KEEP_RECENT_TOKENS = 2_048
 RESERVE_TOKENS = DEFAULT_RESERVE_TOKENS  # legacy import name
 
 SUMMARY_PROMPT = """\
-The following is an earlier portion of a conversation between you (an empathetic AI companion) \
-and a user. Summarize it concisely so you can continue the conversation with full context.
+The following is an earlier portion of a coding-agent conversation. Summarize it
+so the next model call can continue the engineering task without carrying the
+full transcript.
 
-Include:
-- What the user has been going through emotionally
-- Key topics, concerns, and themes discussed
-- Important things you've learned about the user
-- Where the conversation left off and what the user seemed to need most
+Preserve only durable, task-relevant context:
+- Current user goal and any explicit constraints
+- Decisions made, rejected approaches, and reasons
+- Files, symbols, commands, tests, and tool results that mattered
+- Changes already made or planned, including unresolved failures
+- Repository or project instructions that affected the work
+- Open questions, blockers, and the exact next step
 
-Write in first-person ("The user shared…", "We discussed…"). Be concise but preserve nuance."""
+Prefer concise bullets grouped by topic. Omit casual chatter, duplicate tool
+output, raw file contents, and anything that can be rediscovered cheaply."""
 
 
 def parse_compaction_token(value) -> int | None:
@@ -116,8 +120,8 @@ def _estimate_tokens(messages: list[dict]) -> int:
     return sum(content_length(m.get("content", "")) for m in messages) // 4
 
 
-def can_compact(messages: list[dict], model: str) -> bool:
-    return _find_cut_point(messages, model) > 0
+def can_compact(messages: list[dict], model: str, *, force: bool = False) -> bool:
+    return _find_cut_point(messages, model, force=force) > 0
 
 
 def should_compact(
@@ -149,14 +153,18 @@ def _cut_at_recent_budget(messages: list[dict], keep_recent: int) -> int:
     return 0
 
 
-def _find_cut_point(messages: list[dict], model: str) -> int:
+def _find_cut_point(messages: list[dict], model: str, *, force: bool = False) -> int:
     """Return the index of the first message to keep verbatim.
 
     Walks backward until keep_recent_tokens is reached, then snaps to an assistant
-    turn boundary (Pi-style). If the thread is shorter than that budget but still
-    large enough to summarize, keeps roughly half at a turn boundary.
+    turn boundary (Pi-style). If forced, summarizes an older completed turn even
+    when the thread still fits in context. If the thread is shorter than that
+    budget but still large enough to summarize, keeps roughly half at a turn
+    boundary.
     """
     if len(messages) < 3:
+        if force:
+            return _forced_cut_point(messages)
         return 0
 
     window = context_window_tokens(model)
@@ -165,11 +173,40 @@ def _find_cut_point(messages: list[dict], model: str) -> int:
     if cut > 0:
         return cut
 
+    if force:
+        return _forced_cut_point(messages)
+
     total = _estimate_tokens(messages)
     if total <= keep // 2:
         return 0
     fallback_keep = max(MIN_KEEP_RECENT_TOKENS, total // 2)
     return _cut_at_recent_budget(messages, fallback_keep)
+
+
+def _forced_cut_point(messages: list[dict]) -> int:
+    """Cut an older completed assistant turn for manual compaction.
+
+    Manual /compact is often used before a large task, while the thread still
+    fits comfortably. In that case we summarize roughly the older half, but only
+    at a completed assistant boundary. If the conversation ends on an assistant
+    turn, it may summarize the whole completed history so a restored old chat can
+    be compacted before the next task.
+    """
+    total = max(1, _estimate_tokens(messages))
+    target = max(1, total // 2)
+    accumulated = 0
+    fallback = 0
+    for i, msg in enumerate(messages):
+        accumulated += content_length(msg.get("content", "")) // 4
+        if msg.get("role") != "assistant":
+            continue
+        cut = i + 1
+        if cut >= len(messages) and messages[-1].get("role") != "assistant":
+            continue
+        fallback = cut
+        if accumulated >= target:
+            return cut
+    return fallback
 
 
 def _call_model(model: str, prompt: str, max_tokens: int) -> str:
@@ -200,9 +237,9 @@ def _call_model(model: str, prompt: str, max_tokens: int) -> str:
         return resp.choices[0].message.content
 
 
-def compact(model: str, messages: list[dict]) -> list[dict]:
+def compact(model: str, messages: list[dict], *, force: bool = False) -> list[dict]:
     """Return a compacted history: summary synthetic turn + recent verbatim messages."""
-    cut = _find_cut_point(messages, model)
+    cut = _find_cut_point(messages, model, force=force)
     if cut <= 0:
         return messages
 
@@ -230,13 +267,14 @@ class CompactionThread(QThread):
     done  = pyqtSignal(list)   # emits the compacted history
     error = pyqtSignal(str)
 
-    def __init__(self, model: str, history: list):
+    def __init__(self, model: str, history: list, *, force: bool = False):
         super().__init__()
         self.model   = model
         self.history = list(history)
+        self.force   = force
 
     def run(self):
         try:
-            self.done.emit(compact(self.model, self.history))
+            self.done.emit(compact(self.model, self.history, force=self.force))
         except Exception as exc:
             self.error.emit(str(exc))

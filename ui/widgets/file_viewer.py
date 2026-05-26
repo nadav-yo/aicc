@@ -11,7 +11,7 @@ from config import MAX_FILE_PREVIEW_BYTES
 from services.diff_html import inline_new_file_diff_to_html
 from services.git_diff import can_diff_against_head, diff_against_head
 from services.highlight import for_path, for_language
-from ui.theme import palette, mono_font, meta_font_pt
+from ui.theme import palette, mono_font, meta_font_pt, apply_flat_tab_style
 
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".ico"}
 
@@ -166,17 +166,22 @@ class FileViewerPanel(QWidget):
         self._tabs.tabCloseRequested.connect(self._on_tab_close_requested)
 
         root.addWidget(self._tabs)
+        self._apply_tab_style()
 
     def set_repo_root(self, path: str):
         self._repo_root = path
 
     def apply_appearance(self):
+        self._apply_tab_style()
         for i in range(self._tabs.count()):
             widget = self._tabs.widget(i)
             if isinstance(widget, _TextFileTab):
                 widget.apply_appearance()
             elif isinstance(widget, _ImageViewer):
                 widget.apply_appearance()
+
+    def _apply_tab_style(self):
+        apply_flat_tab_style(self._tabs, "fileViewerTabs")
 
     def _find_tab(self, key: str) -> int:
         tab_bar = self._tabs.tabBar()

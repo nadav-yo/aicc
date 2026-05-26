@@ -1,4 +1,5 @@
 import copy
+import html
 import os
 import re
 from dataclasses import dataclass, field
@@ -8,10 +9,10 @@ from uuid import uuid4
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QScrollArea, QFrame,
-    QLabel, QPushButton, QComboBox,
+    QLabel, QPushButton, QComboBox, QSizePolicy,
 )
-from PyQt6.QtCore import Qt, QPoint, QTimer, pyqtSignal, QThread
-from PyQt6.QtGui import QGuiApplication
+from PyQt6.QtCore import Qt, QPoint, QPointF, QSize, QTimer, pyqtSignal, QThread
+from PyQt6.QtGui import QColor, QGuiApplication, QIcon, QPainter, QPainterPath, QPen, QPixmap
 
 from config import IGNORED, MAX_FILE_PREVIEW_BYTES, MAX_TOOL_READ_BYTES
 from config import MODELS, MODEL_PROVIDER
@@ -35,7 +36,7 @@ from services.crew_context import crew_context_window
 from services.tool_policy import ConversationToolPolicy, ToolApprovalBus
 from ui.widgets.tool_approval_dialog import handle_pending_approval
 from services.compaction import CompactionThread, should_compact, can_compact, _estimate_tokens
-from services.content import build_user_content, content_preview
+from services.content import build_user_content, compact_ephemeral_attachments, content_preview
 from services.auto_title import TitleThread
 from services.context_budget import analyze_context
 from services.model_registry import api_key_env_var, get_provider_config, load_user_providers
@@ -43,7 +44,7 @@ from services.workspace import build_system
 from services.export import export_conversation_dialog
 from services.tool_registry import extension_errors, extension_overview
 from ui.theme import (
-    palette, input_bar_style,
+    palette, input_bar_style, separator_color,
     send_button_style, stop_button_style, floating_button_style,
     tool_notice_style, center_notice_style, icon_button_style,
 )
@@ -70,6 +71,37 @@ _INITIAL_RENDER_BYTES = 1 * 1024 * 1024
 _INITIAL_RENDER_MESSAGES = 150
 _OLDER_RENDER_BYTES = 512 * 1024
 _OLDER_RENDER_MESSAGES = 75
+
+
+def _composer_send_icon() -> QIcon:
+    pix = QPixmap(18, 18)
+    pix.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pix)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    path = QPainterPath()
+    path.moveTo(QPointF(3.0, 9.0))
+    path.lineTo(QPointF(15.5, 3.0))
+    path.lineTo(QPointF(11.0, 15.0))
+    path.lineTo(QPointF(8.6, 10.6))
+    path.closeSubpath()
+    painter.setPen(QPen(QColor("#dbeafe"), 1.5))
+    painter.setBrush(QColor(255, 255, 255, 24))
+    painter.drawPath(path)
+    painter.drawLine(QPointF(8.6, 10.6), QPointF(15.5, 3.0))
+    painter.end()
+    return QIcon(pix)
+
+
+def _composer_stop_icon() -> QIcon:
+    pix = QPixmap(18, 18)
+    pix.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pix)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QColor("#fee2e2"))
+    painter.drawRoundedRect(5, 5, 8, 8, 2, 2)
+    painter.end()
+    return QIcon(pix)
 
 
 @dataclass
@@ -156,6 +188,57 @@ def _tool_call_notice(name: str, inputs: dict, cwd: str) -> str:
     return f"Using tool '{name}'"
 
 
+def _tool_notice_html(text: str) -> str:
+    p = palette()
+    raw = str(text or "")
+    label = "Tool"
+    detail = raw
+    code_detail = False
+
+    if raw.startswith("Running command: "):
+        label = "Command"
+        detail = raw[len("Running command: "):]
+        code_detail = True
+    elif raw == "Running command":
+        label = "Command"
+        detail = "running"
+    elif raw.startswith("Reading file "):
+        label = "Read"
+        detail = raw[len("Reading file "):].strip("'")
+        code_detail = True
+    elif raw.startswith("Searching files"):
+        label = "Search"
+        detail = raw[len("Searching "):]
+    elif raw.startswith("Listing files"):
+        label = "List"
+        detail = raw[len("Listing "):]
+    elif raw.startswith(("Editing file ", "Creating file ")):
+        label, detail = raw.split(" file ", 1)
+        detail = detail.strip("'")
+        code_detail = True
+    elif raw.startswith("Fetching web page "):
+        label = "Fetch"
+        detail = raw[len("Fetching web page "):].strip("'")
+    elif raw.startswith("Tool error: "):
+        label = "Tool error"
+        detail = raw[len("Tool error: "):]
+
+    label_html = html.escape(label)
+    detail_html = html.escape(detail)
+    if code_detail:
+        detail_html = detail_html.replace(" ", "&nbsp;")
+        detail_html = (
+            f"<code style=\"background:transparent; color:{p['TEXT']};"
+            "font-family:Consolas, monospace;\">"
+            f"{detail_html}</code>"
+        )
+    return (
+        f"<span style=\"color:{p['TEXT_DIM']};\">{label_html}</span>"
+        f"<span style=\"color:{p['TEXT_DIM']};\">&nbsp;&nbsp;&middot;&nbsp;&nbsp;</span>"
+        f"<span style=\"color:{p['TEXT']};\">{detail_html}</span>"
+    )
+
+
 @dataclass
 class _ConversationRuntime:
     queued: list[dict] = field(default_factory=list)
@@ -199,6 +282,7 @@ class _ScrollHost(QWidget):
 
 class ChatPanel(QWidget):
     saved        = pyqtSignal()
+    conversation_created = pyqtSignal(str)
     open_code    = pyqtSignal(str, str)   # content, title
     open_file    = pyqtSignal(str, object)
     file_written = pyqtSignal(str)
@@ -292,8 +376,8 @@ class ChatPanel(QWidget):
 
         self.msg_container = _MessageListContainer(self._on_message_list_resize)
         self.msg_layout = QVBoxLayout(self.msg_container)
-        self.msg_layout.setContentsMargins(0, 16, 0, 16)
-        self.msg_layout.setSpacing(2)
+        self.msg_layout.setContentsMargins(0, 18, 0, 18)
+        self.msg_layout.setSpacing(4)
         self.msg_layout.addStretch()
 
         self.scroll.setWidget(self.msg_container)
@@ -311,11 +395,8 @@ class ChatPanel(QWidget):
         # input bar
         self._input_frame = QFrame()
         input_col = QVBoxLayout(self._input_frame)
-        input_col.setContentsMargins(16, 12, 16, 14)
-        input_col.setSpacing(8)
-
-        input_row = QHBoxLayout()
-        input_row.setSpacing(8)
+        input_col.setContentsMargins(22, 8, 22, 10)
+        input_col.setSpacing(6)
 
         self.composer = ComposerWidget()
         self.composer.send_requested.connect(self.send)
@@ -333,11 +414,17 @@ class ChatPanel(QWidget):
         self.composer.input.mention_confirm.connect(lambda: self._file_picker and self._file_picker.confirm())
 
         self.btn = QPushButton("Send")
-        self.btn.setFixedHeight(38)
+        self.btn.setFixedSize(72, 30)
+        self.btn.setIcon(_composer_send_icon())
+        self.btn.setIconSize(QSize(14, 14))
+        self.btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn.clicked.connect(self.send)
 
         self.stop_btn = QPushButton("Stop")
-        self.stop_btn.setFixedHeight(38)
+        self.stop_btn.setFixedSize(72, 30)
+        self.stop_btn.setIcon(_composer_stop_icon())
+        self.stop_btn.setIconSize(QSize(13, 13))
+        self.stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.stop_btn.clicked.connect(self._stop_streaming)
         self.stop_btn.hide()
 
@@ -351,10 +438,9 @@ class ChatPanel(QWidget):
         self._queue_list_layout.setSpacing(4)
         self._queue_list.hide()
 
-        input_row.addWidget(self.composer, 1)
-        input_row.addWidget(self.btn)
-        input_row.addWidget(self.stop_btn)
-        input_col.addLayout(input_row)
+        self.composer.action_row.addWidget(self.btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.composer.action_row.addWidget(self.stop_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        input_col.addWidget(self.composer)
         input_col.addWidget(self._queue_label)
         input_col.addWidget(self._queue_list)
         root.addWidget(self._input_frame)
@@ -713,6 +799,7 @@ class ChatPanel(QWidget):
         self._runtime_for(self.conv_id)
         self.store.save(self.conv_id, self.conv_data)
         self.saved.emit()
+        self.conversation_created.emit(self.conv_id)
 
     def _start_assistant(self, skill=None, crew: CrewMember | None = None):
         if not self.conv_id or self.conv_data is None:
@@ -1089,8 +1176,11 @@ class ChatPanel(QWidget):
         ):
             self._add_notice("Context is not large enough to compact yet.")
             return
-        if not can_compact(self.history, model):
-            self._add_notice("Nothing to compact — recent messages already fit in context.")
+        if not can_compact(self.history, model, force=force):
+            if force:
+                self._add_notice("Nothing to compact — need an older completed turn first.")
+            else:
+                self._add_notice("Nothing to compact — recent messages already fit in context.")
             return
         self._set_input_enabled(False)
         self._add_notice("Compacting conversation context…")
@@ -1098,7 +1188,7 @@ class ChatPanel(QWidget):
         if not conv_id:
             return
         history_snapshot = copy.deepcopy(self.history)
-        thread = CompactionThread(model, history_snapshot)
+        thread = CompactionThread(model, history_snapshot, force=force)
         self._runtime_for(conv_id).compaction = _CompactionRun(
             conv_id=conv_id,
             thread=thread,
@@ -1117,6 +1207,8 @@ class ChatPanel(QWidget):
             return
         run.partial_text += text
         if run.conv_id == self.conv_id:
+            if run.bubble and run.bubble.is_empty_typing():
+                self._remove_empty_active_typing_bubble()
             self._stream_buffer.append(text)
             if not self._stream_flush_timer.isActive():
                 self._stream_flush_timer.start()
@@ -1249,8 +1341,7 @@ class ChatPanel(QWidget):
             preview = output[:200].replace("\n", " ") + ("…" if len(output) > 200 else "")
             message = preview.removeprefix("[tool error]").strip()
             self._add_tool_notice(f"Tool error: {message}")
-        run.bubble = None
-        self.active_bubble = None
+        self._show_post_tool_thinking(run)
 
     def _on_done(self, run_id: str, full: str):
         run = self._find_run(run_id)
@@ -1274,6 +1365,7 @@ class ChatPanel(QWidget):
         else:
             run_history.append(assistant_msg)
             if run.conv_id and run_data:
+                run_history = compact_ephemeral_attachments(run_history)
                 run_data["messages"] = run_history
                 run_data["updated_at"] = now
                 self.store.save(run.conv_id, run_data)
@@ -1318,6 +1410,9 @@ class ChatPanel(QWidget):
             self._add_notice(_crew_notice_text(run.crew, "left"))
 
         if is_current:
+            self.history = compact_ephemeral_attachments(self.history)
+            if self.conv_data is not None:
+                self.conv_data["messages"] = self.history
             self._sync_visible_runtime_refs()
             self._exit_streaming()
             self._maybe_auto_title()
@@ -1341,7 +1436,7 @@ class ChatPanel(QWidget):
         self._runtime_for(conv_id).compaction = None
         if conv_id == self.conv_id:
             self._sync_visible_runtime_refs()
-            self.history = compacted
+            self.history = compact_ephemeral_attachments(compacted)
             if self.conv_data is not None:
                 self.conv_data["messages"] = self.history
             self._render_history_tail()
@@ -1353,7 +1448,7 @@ class ChatPanel(QWidget):
             self._start_next_queued()
         else:
             data = copy.deepcopy(compaction.data_snapshot)
-            data["messages"] = compacted
+            data["messages"] = compact_ephemeral_attachments(compacted)
             data["updated_at"] = datetime.now().isoformat()
             self.store.save(conv_id, data)
             self.saved.emit()
@@ -1488,7 +1583,7 @@ class ChatPanel(QWidget):
 
     def _save(self, *, touch_updated: bool = False):
         if self.conv_id and self.conv_data is not None:
-            self.conv_data["messages"]   = self.history
+            self.conv_data["messages"]   = compact_ephemeral_attachments(self.history)
             if touch_updated or not self.conv_data.get("updated_at"):
                 self.conv_data["updated_at"] = datetime.now().isoformat()
             self.store.save(self.conv_id, self.conv_data)
@@ -1584,17 +1679,28 @@ class ChatPanel(QWidget):
         """Left-align an ArtifactCard to match AI bubble positioning."""
         wrapper = QWidget()
         row = QHBoxLayout(wrapper)
-        row.setContentsMargins(16, 2, 16, 2)
+        row.setContentsMargins(60, 4, 24, 4)
         row.addWidget(card)
         row.addStretch()
         return wrapper
 
     def _add_tool_notice(self, text: str):
+        wrapper = QWidget()
+        row = QHBoxLayout(wrapper)
+        row.setContentsMargins(60, 1, 24, 1)
+        row.setSpacing(0)
         lbl = QLabel(text)
         lbl.setObjectName("aicc-tool-notice")
+        lbl.setProperty("aicc-tool-text", text)
+        lbl.setTextFormat(Qt.TextFormat.RichText)
+        lbl.setText(_tool_notice_html(text))
         lbl.setWordWrap(True)
+        lbl.setMaximumWidth(880)
+        lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         lbl.setStyleSheet(tool_notice_style())
-        self.msg_layout.insertWidget(self.msg_layout.count() - 1, lbl)
+        row.addWidget(lbl, 1)
+        row.addStretch()
+        self.msg_layout.insertWidget(self.msg_layout.count() - 1, wrapper)
         self._bottom()
 
     def _add_notice(self, text: str):
@@ -1604,6 +1710,17 @@ class ChatPanel(QWidget):
         lbl.setStyleSheet(center_notice_style())
         self.msg_layout.insertWidget(self.msg_layout.count() - 1, lbl)
         self._bottom()
+
+    def _show_post_tool_thinking(self, run: _AssistantRun):
+        if run.conv_id != self.conv_id:
+            return
+        if run.bubble and run.bubble.is_empty_typing():
+            self.active_bubble = run.bubble
+            return
+        if run.bubble:
+            return
+        run.bubble = self._add_bubble("", is_user=False, typing=True, crew=run.crew)
+        self.active_bubble = run.bubble
 
     def _add_bubble(self, content, is_user: bool, typing: bool = False,
                     history_index: int = -1, timestamp: str = "",
@@ -1668,9 +1785,11 @@ class ChatPanel(QWidget):
                 item.widget().deleteLater()
 
     def _apply_chrome(self):
-        p = palette()
         self._update_context_ui()
-        self._sep.setStyleSheet(f"background:{p['BORDER']}; max-height:1px;")
+        sep = separator_color()
+        self._sep.setStyleSheet(
+            f"background:{sep}; color:{sep}; border:none; max-height:1px;"
+        )
         self._input_frame.setStyleSheet(input_bar_style())
         self.jump_btn.setStyleSheet(floating_button_style())
         self.btn.setStyleSheet(send_button_style())
@@ -1699,6 +1818,9 @@ class ChatPanel(QWidget):
             name = lbl.objectName()
             if name == "aicc-tool-notice":
                 lbl.setStyleSheet(tool_notice_style())
+                raw = lbl.property("aicc-tool-text")
+                if raw:
+                    lbl.setText(_tool_notice_html(str(raw)))
             elif name == "aicc-center-notice":
                 lbl.setStyleSheet(center_notice_style())
 
@@ -1996,7 +2118,9 @@ class ChatPanel(QWidget):
         data["messages"] = history
         data["updated_at"] = now
         model = data.get("model") or self.model_combo.currentText()
-        self.store.save(conv_id, data)
+        persisted = copy.deepcopy(data)
+        persisted["messages"] = compact_ephemeral_attachments(history)
+        self.store.save(conv_id, persisted)
         self.saved.emit()
         self._start_assistant_run(
             conv_id,

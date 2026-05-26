@@ -4,6 +4,7 @@ import pytest
 
 from services.compaction import (
     _estimate_tokens,
+    _forced_cut_point,
     _find_cut_point,
     can_compact,
     compact,
@@ -68,6 +69,34 @@ def test_find_cut_point_small_history():
     assert _find_cut_point(messages, "claude-sonnet-4-6") == 0
 
 
+def test_forced_cut_point_compacts_before_context_pressure():
+    messages = [
+        {"role": "user", "content": "goal"},
+        {"role": "assistant", "content": "plan"},
+        {"role": "user", "content": "next"},
+        {"role": "assistant", "content": "answer"},
+    ]
+    assert _find_cut_point(messages, "claude-sonnet-4-6") == 0
+    assert _find_cut_point(messages, "claude-sonnet-4-6", force=True) == 2
+    assert _forced_cut_point(messages) == 2
+
+
+def test_forced_cut_point_can_compact_completed_restored_chat():
+    messages = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "yo"}]
+    assert _find_cut_point(messages, "claude-sonnet-4-6") == 0
+    assert _find_cut_point(messages, "claude-sonnet-4-6", force=True) == 2
+    assert _forced_cut_point(messages) == 2
+
+
+def test_forced_cut_point_keeps_incomplete_tail():
+    messages = [
+        {"role": "user", "content": "goal"},
+        {"role": "assistant", "content": "plan"},
+        {"role": "user", "content": "new task"},
+    ]
+    assert _find_cut_point(messages, "claude-sonnet-4-6", force=True) == 2
+
+
 def test_find_cut_point_large_history():
     messages = _msgs(30, size=8000)
     cut = _find_cut_point(messages, "claude-sonnet-4-6")
@@ -84,6 +113,7 @@ def test_find_cut_point_small_window_fallback(monkeypatch):
 def test_can_compact():
     model = "claude-sonnet-4-6"
     assert not can_compact([{"role": "user", "content": "short"}], model)
+    assert can_compact(_msgs(4, size=10), model, force=True)
     assert can_compact(_msgs(25, size=6000), model)
 
 
@@ -107,5 +137,25 @@ def test_compact_replaces_prefix(monkeypatch):
     with patch("services.compaction._call_model", return_value="Summary text.") as call:
         out = compact("claude-sonnet-4-6", messages)
     assert call.call_args.args[2] == summary_max_tokens(180_000)
+    assert "coding-agent conversation" in call.call_args.args[1]
+    assert "Files, symbols, commands, tests" in call.call_args.args[1]
     assert out[0]["content"].startswith("[Conversation summary]")
     assert len(out) < len(messages)
+
+
+def test_compact_force_replaces_small_prefix():
+    messages = _msgs(4, size=20)
+    with patch("services.compaction._call_model", return_value="Manual summary."):
+        out = compact("claude-sonnet-4-6", messages, force=True)
+    assert out[0]["content"].startswith("[Conversation summary]")
+    assert out[2:] == messages[2:]
+
+
+def test_compact_force_replaces_completed_restored_chat():
+    messages = _msgs(2, size=20)
+    with patch("services.compaction._call_model", return_value="Restored summary."):
+        out = compact("claude-sonnet-4-6", messages, force=True)
+    assert out == [
+        {"role": "user", "content": "[Conversation summary]\nRestored summary."},
+        {"role": "assistant", "content": "Thank you for the context — I'm fully caught up."},
+    ]

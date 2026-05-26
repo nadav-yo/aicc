@@ -18,6 +18,7 @@ from ui.avatars import AVATAR_SIZE, avatar_label, avatar_pixmap
 from ui.theme import (
     palette, chat_font_pt, bubble_label_style, composer_style, edit_bubble_style,
     markdown_css, markdown_file_link_style, timestamp_style, crew_name_style, crew_tone,
+    user_reference_style,
 )
 
 _CODE_RE = re.compile(r"```([^\n`]*)\n(.*?)```", re.DOTALL)
@@ -71,14 +72,17 @@ _MENTION_RE = re.compile(r'@(?:"([^"]+)"|([^\s@]+))')
 
 def _linkify_user_text(text: str) -> str:
     """Turn @file mentions in user messages into clickable file links."""
-    link_style = markdown_file_link_style()
+    link_style = user_reference_style()
 
     def repl(match: re.Match) -> str:
         path = (match.group(1) or match.group(2) or "").strip()
         if not path:
             return match.group(0)
+        label = html.escape(match.group(0)).replace(" ", "&nbsp;")
+        is_file_ref = any(ch in path for ch in (".", "/", "\\"))
+        if not is_file_ref:
+            return f'<span style="{link_style}">{label}</span>'
         href = html.escape(f"aicc-file:{path}", quote=True)
-        label = html.escape(match.group(0))
         return f'<a href="{href}" style="{link_style}">{label}</a>'
 
     parts: list[str] = []
@@ -252,13 +256,13 @@ class MessageBubble(QFrame):
             self.setToolTip(format_timestamp(timestamp))
 
         row = QHBoxLayout(self)
-        row.setContentsMargins(20, 6, 20, 6)
+        row.setContentsMargins(24, 7, 24, 7)
         row.setSpacing(8)
 
         portrait = self._portrait(is_user)
 
         self.body = QVBoxLayout()
-        self.body.setSpacing(4)
+        self.body.setSpacing(5)
 
         for img in image_blocks(content):
             self.body.addWidget(
@@ -271,7 +275,9 @@ class MessageBubble(QFrame):
         self._copy_text = text
         self.label = QLabel(text)
         self.label.setWordWrap(True)
-        self.label.setMaximumWidth(480)
+        self.label.setMaximumWidth(440 if is_user else 880)
+        if not is_user:
+            self.label.setMinimumWidth(520)
         self.label.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse |
             Qt.TextInteractionFlag.LinksAccessibleByMouse

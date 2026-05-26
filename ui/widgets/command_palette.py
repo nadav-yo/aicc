@@ -6,7 +6,7 @@ from PyQt6.QtCore import Qt, QSize, QEvent
 from PyQt6.QtGui import QKeyEvent
 
 from services.palette import PaletteItem, filter_items
-from ui.theme import palette, ACCENT, meta_font_pt, chat_font_pt
+from ui.theme import palette, ACCENT, meta_font_pt, chat_font_pt, separator_color
 
 
 class _QueryInput(QLineEdit):
@@ -91,7 +91,10 @@ class CommandPalette(QDialog):
 
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setStyleSheet(f"background:{p['BORDER']}; max-height:1px;")
+        sep_color = separator_color()
+        sep.setStyleSheet(
+            f"background:{sep_color}; color:{sep_color}; border:none; max-height:1px;"
+        )
         root.addWidget(sep)
 
         self._list = QListWidget()

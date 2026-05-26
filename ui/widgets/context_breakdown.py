@@ -4,7 +4,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 
 from services.context_budget import ContextBudget, format_bytes
-from ui.theme import palette, ACCENT, meta_font_pt, chat_font_pt, MONO_FONT_CSS
+from ui.theme import palette, ACCENT, meta_font_pt, chat_font_pt, MONO_FONT_CSS, separator_color
 
 
 class ContextBreakdownDialog(QDialog):
@@ -39,7 +39,10 @@ class ContextBreakdownDialog(QDialog):
 
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setStyleSheet(f"background:{p['BORDER']}; max-height:1px;")
+        sep_color = separator_color()
+        sep.setStyleSheet(
+            f"background:{sep_color}; color:{sep_color}; border:none; max-height:1px;"
+        )
         root.addWidget(sep)
 
         cols = QHBoxLayout()
@@ -61,7 +64,9 @@ class ContextBreakdownDialog(QDialog):
 
         sep2 = QFrame()
         sep2.setFrameShape(QFrame.Shape.HLine)
-        sep2.setStyleSheet(f"background:{p['BORDER']}; max-height:1px;")
+        sep2.setStyleSheet(
+            f"background:{sep_color}; color:{sep_color}; border:none; max-height:1px;"
+        )
         root.addWidget(sep2)
 
         footer = QLabel(

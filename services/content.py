@@ -1,4 +1,5 @@
 import base64
+import copy
 
 from services.crew import crew_name_from_metadata
 
@@ -18,14 +19,27 @@ def build_user_content(text: str, images: list[dict], files: list[dict] | None =
             "content": file["content"],
             "truncated": file.get("truncated", False),
             "size": file.get("size", 0),
+            "ephemeral": True,
         })
     for img in images:
         blocks.append({
             "type": "image",
             "media_type": img["media_type"],
             "data": img["data"],
+            "ephemeral": True,
         })
     return blocks
+
+
+def compact_ephemeral_attachments(messages: list[dict]) -> list[dict]:
+    """Return history with old attachment payloads replaced by small markers."""
+    compacted = copy.deepcopy(messages)
+    for msg in compacted:
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        msg["content"] = _compact_ephemeral_blocks(content)
+    return compacted
 
 
 def content_text(content) -> str:
@@ -78,6 +92,34 @@ def content_preview(content) -> str:
                 parts.append(content_preview(block.get("content", "")))
         return " ".join(p for p in parts if p)
     return str(content)
+
+
+def _compact_ephemeral_blocks(blocks: list) -> list:
+    out = []
+    for block in blocks:
+        if not isinstance(block, dict):
+            out.append(block)
+            continue
+        kind = block.get("type")
+        if kind == "file" and block.get("ephemeral") and block.get("content"):
+            updated = dict(block)
+            updated["content"] = ""
+            updated["omitted_after_turn"] = True
+            out.append(updated)
+        elif kind == "image" and block.get("ephemeral") and block.get("data"):
+            media_type = block.get("media_type", "image")
+            size = len(str(block.get("data") or ""))
+            out.append({
+                "type": "text",
+                "text": f"[Image attachment omitted after original turn: {media_type}, {size} base64 chars]",
+            })
+        elif "content" in block and isinstance(block["content"], list):
+            updated = dict(block)
+            updated["content"] = _compact_ephemeral_blocks(block["content"])
+            out.append(updated)
+        else:
+            out.append(block)
+    return out
 
 
 def image_blocks(content) -> list[dict]:
@@ -218,6 +260,12 @@ def _to_openai_blocks(blocks: list[dict]) -> list[dict]:
 
 def _file_block_text(block: dict) -> str:
     path = block.get("path", "file")
+    if block.get("omitted_after_turn"):
+        size = block.get("size", 0)
+        return (
+            f"Attached file: {path}\n\n"
+            f"[Attachment content omitted after the original turn; size: {size} bytes.]"
+        )
     suffix = ""
     if block.get("truncated"):
         suffix = f"\n[Preview truncated: showing part of {block.get('size', 0)} bytes]"

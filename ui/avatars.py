@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import QLabel
 from config import AVATARS_DIR
 from storage.settings import SettingsStore
 
-AVATAR_SIZE = 36
+AVATAR_SIZE = 28
 _ASSETS = Path(__file__).resolve().parents[1] / "assets" / "avatars"
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"}
 _cache: dict[str, QPixmap] = {}

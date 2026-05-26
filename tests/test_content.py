@@ -1,5 +1,6 @@
 from services.content import (
     build_user_content,
+    compact_ephemeral_attachments,
     content_length,
     content_preview,
     content_text,
@@ -22,6 +23,7 @@ def test_build_user_content_multimodal():
     )
     types = {b["type"] for b in blocks}
     assert types == {"text", "image", "file"}
+    assert all(b.get("ephemeral") for b in blocks if b["type"] in {"image", "file"})
 
 
 def test_content_helpers():
@@ -117,3 +119,48 @@ def test_prepare_keeps_direct_crew_reply_without_lead_synthesis():
     ]
     openai = prepare_for_openai(messages)
     assert openai[1]["content"] == "Scout: found it"
+
+
+def test_compact_ephemeral_attachments_removes_payloads():
+    messages = [
+        {
+            "role": "user",
+            "content": build_user_content(
+                "look",
+                [{"media_type": "image/png", "data": "abc" * 100}],
+                [{"path": "a.py", "content": "print('x')", "size": 10}],
+            ),
+        }
+    ]
+
+    compacted = compact_ephemeral_attachments(messages)
+
+    assert messages[0]["content"][1]["content"] == "print('x')"
+    blocks = compacted[0]["content"]
+    assert blocks[1]["type"] == "file"
+    assert blocks[1]["content"] == ""
+    assert blocks[1]["omitted_after_turn"] is True
+    assert blocks[2]["type"] == "text"
+    assert "Image attachment omitted" in blocks[2]["text"]
+    assert content_length(compacted[0]["content"]) < content_length(messages[0]["content"])
+
+
+def test_prepare_file_block_notes_omitted_attachment():
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "again"},
+                {
+                    "type": "file",
+                    "path": "a.py",
+                    "content": "",
+                    "size": 42,
+                    "omitted_after_turn": True,
+                },
+            ],
+        }
+    ]
+
+    anthropic = prepare_for_anthropic(messages)
+    assert "content omitted after the original turn" in anthropic[0]["content"][1]["text"]

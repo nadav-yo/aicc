@@ -88,8 +88,8 @@ if sys.platform == "darwin":
     UI_FONT = "Helvetica Neue"
     FONT_FAMILY = '"Helvetica Neue", "Segoe UI", sans-serif'
 elif sys.platform == "win32":
-    UI_FONT = "Segoe UI"
-    FONT_FAMILY = '"Segoe UI", sans-serif'
+    UI_FONT = "Aptos"
+    FONT_FAMILY = '"Aptos", "Segoe UI Variable Text", "Segoe UI", sans-serif'
 else:
     UI_FONT = "Sans Serif"
     FONT_FAMILY = "sans-serif"
@@ -151,10 +151,18 @@ def app_font(size_name: str | None = None):
     from PyQt6.QtGui import QFont, QFontDatabase
     from PyQt6.QtWidgets import QApplication
 
+    font = QFont(UI_FONT)
     if QApplication.instance():
-        font = QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont)
-    else:
-        font = QFont(UI_FONT)
+        families = set(QFontDatabase.families())
+        for family in (
+            UI_FONT, "Aptos Display", "Segoe UI Variable Text",
+            "Segoe UI Variable Display", "Segoe UI", "Helvetica Neue",
+        ):
+            if family in families:
+                font = QFont(family)
+                break
+        else:
+            font = QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont)
     font.setPointSize(chat_font_pt(size_name))
     return font
 
@@ -172,23 +180,25 @@ def markdown_css(font_pt: int | None = None, theme: str | None = None) -> str:
     p = palette(theme)
     fs = font_pt or chat_font_pt()
     is_light = (theme or current_theme()) == "light"
-    code_bg = "rgba(0,0,0,0.06)" if is_light else "rgba(255,255,255,0.08)"
+    code_bg = "#eef2ff" if is_light else "#182232"
+    code_fg = "#27272a" if is_light else "#f1f5ff"
     quote_border = ACCENT if is_light else "#4a5568"
     link = p["LINK"]
     file_link = p["FILE_LINK"]
     return (
         f"body {{ margin:0; padding:0; color:{p['BUBBLE_AI_TEXT']}; font-size:{fs}px;"
-        f"line-height:1.55; font-family:{FONT_FAMILY}; }}"
+        f"line-height:1.58; font-family:{FONT_FAMILY}; }}"
         f"a {{ color:{link}; text-decoration:none; }}"
-        f"a.aicc-file-link {{ color:{file_link}; text-decoration:underline;"
-        "text-decoration-thickness:1px; text-underline-offset:2px; }"
-        f"code {{ background:{code_bg}; border-radius:5px;"
-        f"padding:2px 6px; font-family:{MONO_FONT_CSS}; font-size:{max(10, fs - 2)}px; }}"
-        f"pre {{ background:{code_bg}; border-radius:8px; padding:8px 10px;"
+        f"a.aicc-file-link {{ color:{file_link}; text-decoration:none; }}"
+        f"code {{ background:{code_bg}; border-radius:4px;"
+        f"padding:1px 4px; color:{code_fg}; font-family:{MONO_FONT_CSS};"
+        f"font-size:{max(10, fs - 1)}px; }}"
+        f"pre {{ background:rgba(255,255,255,0.04); border-radius:8px; padding:8px 10px;"
         "white-space:pre-wrap; margin:6px 0; }}"
         "pre code { background:transparent; padding:0; border-radius:0; }"
         "h1,h2,h3 { margin:8px 0 4px 0; font-weight:600; }"
-        "ul,ol { margin:6px 0; padding-left:20px; }"
+        "ul,ol { margin:8px 0; padding-left:22px; }"
+        "li { margin:3px 0; padding-left:2px; }"
         "p { margin:4px 0; }"
         f"blockquote {{ margin:6px 0 6px 4px; padding-left:12px;"
         f"border-left:3px solid {quote_border}; color:{p['TEXT_DIM']}; }}"
@@ -197,19 +207,43 @@ def markdown_css(font_pt: int | None = None, theme: str | None = None) -> str:
 
 def markdown_file_link_style(theme: str | None = None) -> str:
     p = palette(theme)
+    is_light = (theme or current_theme()) == "light"
+    bg = "#e8f0ff" if is_light else "#1a2c48"
+    fg = "#0f4fa8" if is_light else "#b7d5ff"
     return (
-        f"color:{p['FILE_LINK']};"
-        "text-decoration:underline;"
-        "text-decoration-thickness:1px;"
-        "text-underline-offset:2px;"
+        f"color:{fg}; background:{bg};"
+        "text-decoration:none; border-radius:5px; padding:1px 5px;"
+        "font-weight:600;"
     )
+
+
+def user_reference_style() -> str:
+    return (
+        "color:#f8fbff; background:#5b86df;"
+        "text-decoration:none; border-radius:5px; padding:1px 5px;"
+        "font-weight:600;"
+    )
+
+
+def composer_reference_colors() -> dict:
+    if current_theme() == "light":
+        return {"fg": "#0f3f94", "bg": "#e8f0ff"}
+    return {"fg": "#dbeafe", "bg": "#1c3154"}
 
 
 def card_frame_style() -> str:
     p = palette()
+    bg = {
+        "dark": "#121720",
+        "modern": "#131a22",
+    }.get(current_theme(), p["BG3"])
+    border = {
+        "dark": "#202a34",
+        "modern": "#26313b",
+    }.get(current_theme(), p["BORDER"])
     return (
-        f"QFrame {{ background:{p['BG3']}; border:1px solid {p['BORDER']};"
-        f"border-radius:10px; }}"
+        f"QFrame {{ background:{bg}; border:1px solid {border};"
+        f"border-radius:8px; }}"
     )
 
 
@@ -217,10 +251,17 @@ def tool_notice_style() -> str:
     p = palette()
     fs = meta_font_pt()
     return (
-        f"color:{p['TEXT_DIM']}; font-size:{fs}px; font-family:{MONO_FONT_CSS};"
-        f"background:{p['BG3']}; padding:6px 12px; border:1px solid {p['BORDER']};"
-        f"border-radius:8px; margin:4px 16px;"
+        f"color:{p['TEXT_DIM']}; font-size:{fs}px; font-family:{FONT_FAMILY};"
+        "background:transparent; padding:2px 0; border:none;"
     )
+
+
+def separator_color() -> str:
+    p = palette()
+    return {
+        "dark": "#1a1d23",
+        "modern": "#202832",
+    }.get(current_theme(), p["BORDER_SUBTLE"])
 
 
 def center_notice_style() -> str:
@@ -231,8 +272,7 @@ def center_notice_style() -> str:
 def input_bar_style() -> str:
     p = palette()
     return (
-        f"QFrame {{ background:{p['BG2']}; border-top:1px solid {p['BORDER_SUBTLE']};"
-        f"padding:2px 0; }}"
+        f"QFrame {{ background:{p['BG']}; border-top:1px solid {separator_color()}; }}"
     )
 
 
@@ -257,11 +297,32 @@ def _pill_button_style(
 
 
 def send_button_style() -> str:
-    return _pill_button_style(ACCENT, ACCENT_HOVER, ACCENT_DIM, ACCENT_DIM, "#9bb8e8")
+    return _composer_action_button_style(ACCENT_DIM, ACCENT, "#2f5fb8", ACCENT_SOFT_DARK, "#8daee8")
 
 
 def stop_button_style() -> str:
-    return _pill_button_style("#dc2626", "#ef4444", "#b91c1c", "#7f1d1d", "#fca5a5")
+    return _composer_action_button_style("#dc2626", "#ef4444", "#b91c1c", "#7f1d1d", "#fca5a5")
+
+
+def _composer_action_button_style(
+    bg: str,
+    hover: str,
+    pressed: str,
+    disabled_bg: str,
+    disabled_fg: str,
+) -> str:
+    fs = max(11, chat_font_pt() - 1)
+    height = 32
+    radius = 9
+    return (
+        f"QPushButton {{ background:{bg}; color:white; border:none;"
+        f"border-radius:{radius}px; padding:0 10px; font-size:{fs}px; font-weight:500;"
+        f"font-family:{FONT_FAMILY};"
+        f"min-width:64px; min-height:{height}px; max-height:{height}px; }}"
+        f"QPushButton:hover {{ background:{hover}; }}"
+        f"QPushButton:pressed {{ background:{pressed}; }}"
+        f"QPushButton:disabled {{ background:{disabled_bg}; color:{disabled_fg}; }}"
+    )
 
 
 def floating_button_style() -> str:
@@ -274,13 +335,13 @@ def floating_button_style() -> str:
 
 def new_chat_button_style() -> str:
     p = palette()
-    fs = chat_font_pt()
-    soft = ACCENT_SOFT_LIGHT if current_theme() == "light" else ACCENT_SOFT_DARK
+    fs = max(12, chat_font_pt() - 1)
+    soft = "#edf4ff" if current_theme() == "light" else "#182847"
     return (
         f"QPushButton {{ background:{soft}; color:{ACCENT}; border:none;"
-        f"border-radius:10px; margin:10px 12px 6px 12px; padding:10px 14px;"
+        f"border-radius:8px; margin:8px 14px 6px 14px; padding:7px 12px;"
         f"font-size:{fs}px; font-weight:600; }}"
-        f"QPushButton:hover {{ background:{ACCENT}; color:white; }}"
+        f"QPushButton:hover {{ background:#213963; color:#dbeafe; }}"
     )
 
 
@@ -343,23 +404,67 @@ def files_header_style() -> str:
 
 def search_field_style() -> str:
     p = palette()
-    fs = chat_font_pt()
+    fs = max(12, chat_font_pt() - 1)
+    bg = "#151922" if current_theme() != "light" else p["INPUT_BG"]
+    border = "#202a34" if current_theme() != "light" else p["BORDER_SUBTLE"]
     return (
-        f"QLineEdit {{ background:{p['BG3']}; color:{p['TEXT']};"
-        f"border:1px solid {p['BORDER_SUBTLE']}; border-radius:10px;"
-        f"margin:0 12px 8px 12px; padding:8px 12px; font-size:{fs}px; }}"
-        f"QLineEdit:focus {{ border:1px solid {ACCENT}; }}"
+        f"QLineEdit {{ background:{bg}; color:{p['TEXT']};"
+        f"border:1px solid {border}; border-radius:8px;"
+        f"margin:2px 14px 8px 14px; padding:7px 11px; font-size:{fs}px; }}"
+        f"QLineEdit:focus {{ border:1px solid {ACCENT_DIM}; }}"
     )
 
 
 def conversation_list_style() -> str:
     p = palette()
-    sel = list_selection_bg()
+    sel = "#1d2d4d" if current_theme() != "light" else list_selection_bg()
+    hover = "#171b24" if current_theme() != "light" else p["BG3"]
     return (
         f"QListWidget {{ background:{p['BG2']}; border:none; outline:none; }}"
-        f"QListWidget::item {{ border:none; border-radius:8px; margin:1px 4px; }}"
-        f"QListWidget::item:hover {{ background:{p['BG3']}; }}"
+        f"QListWidget::item {{ border:none; border-radius:7px; margin:1px 7px; }}"
+        f"QListWidget::item:hover {{ background:{hover}; }}"
         f"QListWidget::item:selected {{ background:{sel}; color:{p['SELECTION_TEXT']}; }}"
+    )
+
+
+def flat_tab_style(object_name: str) -> str:
+    p = palette()
+    meta = meta_font_pt()
+    prefix = f"QTabWidget#{object_name}"
+    return (
+        f"{prefix} {{ background:{p['BG2']}; border:0px; }}"
+        f"{prefix}::pane {{ border:0px; background:{p['BG2']}; }}"
+        f"{prefix} QTabBar {{ background:{p['BG2']}; border:0px; }}"
+        f"{prefix} QTabBar::base {{ background:{p['BG2']};"
+        "border:0px; height:0px; }"
+        f"{prefix} QTabBar::tab {{ background:transparent; color:{p['TEXT_DIM']};"
+        f"padding:8px 16px; border:0px; border-bottom:1px solid {p['BG2']};"
+        f"font-size:{meta}px; font-weight:normal; margin:0px; }}"
+        f"{prefix} QTabBar::tab:selected {{ color:{p['TEXT']};"
+        f"border-bottom:1px solid {ACCENT};"
+        "font-weight:bold; }"
+        f"{prefix} QTabBar::tab:hover {{ color:{p['TEXT']};"
+        f"background:{p['BG2']}; }}"
+    )
+
+
+def apply_flat_tab_style(tabs, object_name: str) -> None:
+    tabs.setObjectName(object_name)
+    tabs.setDocumentMode(True)
+    tabs.tabBar().setDrawBase(False)
+    tabs.setStyleSheet(flat_tab_style(object_name))
+
+
+def sidebar_tab_style() -> str:
+    return flat_tab_style("sidebarTabs")
+
+
+def sidebar_settings_button_style() -> str:
+    p = palette()
+    return (
+        f"QPushButton {{ background:{p['BG2']}; color:{p['TEXT_DIM']}; border:none;"
+        f"border-top:1px solid {separator_color()}; font-size:15px; padding:6px; }}"
+        f"QPushButton:hover {{ background:{p['BG3']}; color:{p['TEXT']}; }}"
     )
 
 
@@ -460,14 +565,14 @@ QPushButton      {{
 QPushButton:hover {{ background:{p["BORDER"]}; border-color:{p["TEXT_DIM"]}; }}
 QPushButton:pressed {{ background:{p["BG2"]}; }}
 QPushButton:disabled {{ background:{p["BG2"]}; color:{p["TEXT_DIM"]}; border-color:{p["BORDER_SUBTLE"]}; }}
-QTabWidget::pane {{ border:none; background:{p["BG2"]}; top:-1px; }}
+QTabWidget::pane {{ border:0px; background:{p["BG2"]}; }}
 QTabBar::tab {{
     background:transparent; color:{p["TEXT_DIM"]}; padding:8px 16px;
-    border:none; border-bottom:2px solid transparent; font-size:{meta}px;
-    font-weight:500; margin:0 2px;
+    border:0px; border-bottom:2px solid {p["BG2"]}; font-size:{meta}px;
+    font-weight:normal; margin:0px;
 }}
-QTabBar::tab:selected {{ color:{p["TEXT"]}; border-bottom:2px solid {ACCENT}; font-weight:600; }}
-QTabBar::tab:hover {{ color:{p["TEXT"]}; background:{p["BG3"]}; border-radius:6px 6px 0 0; }}
+QTabBar::tab:selected {{ color:{p["TEXT"]}; border-bottom:2px solid {ACCENT}; font-weight:bold; }}
+QTabBar::tab:hover {{ color:{p["TEXT"]}; background:{p["BG3"]}; border-radius:6px; }}
 QTreeWidget      {{ background:{p["BG2"]}; border:none; font-size:{fs}px; color:{p["TEXT"]}; outline:none; }}
 QTreeWidget::item {{ padding:3px 2px; border-radius:4px; border:none; outline:none; }}
 QTreeWidget::item:hover {{ background:{p["BG3"]}; }}
@@ -505,9 +610,11 @@ def bubble_label_style(
     p = palette()
     fs = font_pt or chat_font_pt()
     if is_user:
+        user_bg = "#3f73d8" if current_theme() != "light" else ACCENT_DIM
         return (
-            f"background:{ACCENT}; color:white; padding:10px 16px;"
-            f"border-radius:18px; font-size:{fs}px; line-height:1.45;"
+            f"background:{user_bg}; color:white; padding:8px 14px;"
+            f"border-radius:16px; font-size:{fs}px; line-height:1.45;"
+            f"font-family:{FONT_FAMILY};"
         )
     if crew_id:
         tone = crew_tone(crew_id, custom_color=crew_color)
@@ -518,9 +625,9 @@ def bubble_label_style(
             f"font-size:{fs}px; line-height:1.45;"
         )
     return (
-        f"background:{p['BUBBLE_AI']}; color:{p['BUBBLE_AI_TEXT']}; padding:10px 16px;"
-        f"border:1px solid {p['BORDER_SUBTLE']}; border-radius:18px; font-size:{fs}px;"
-        f"line-height:1.45;"
+        f"background:transparent; color:{p['BUBBLE_AI_TEXT']}; padding:2px 4px;"
+        f"border:none; border-radius:0; font-size:{fs}px;"
+        f"line-height:1.55; font-family:{FONT_FAMILY};"
     )
 
 
@@ -528,10 +635,32 @@ def composer_style(font_pt: int | None = None) -> str:
     p = palette()
     fs = font_pt or chat_font_pt()
     return (
-        f"QTextEdit {{ background:{p['INPUT_BG']}; color:{p['INPUT_TEXT']};"
-        f"border:1px solid {p['BORDER']}; border-radius:14px;"
-        f"padding:10px 16px; font-size:{fs}px; selection-background-color:{ACCENT}; }}"
-        f"QTextEdit:focus {{ border:1px solid {ACCENT}; }}"
+        f"QTextEdit {{ background:transparent; color:{p['INPUT_TEXT']}; border:none;"
+        f"padding:4px 0; font-size:{fs}px; font-family:{FONT_FAMILY};"
+        f"selection-background-color:{ACCENT}; placeholder-text-color:{p['TEXT_DIM']}; }}"
+        f"QTextEdit:focus {{ border:none; }}"
+    )
+
+
+def composer_shell_style() -> str:
+    p = palette()
+    theme = current_theme()
+    shell_bg = {
+        "dark": "#12161d",
+        "modern": "#121820",
+    }.get(theme, p["INPUT_BG"])
+    shell_border = {
+        "dark": "#27313b",
+        "modern": "#2c3742",
+    }.get(theme, p["BORDER"])
+    shell_focus = {
+        "dark": "#385fba",
+        "modern": "#3b6cc5",
+    }.get(theme, ACCENT_DIM)
+    return (
+        f"QFrame#composerShell {{ background:{shell_bg};"
+        f"border:1px solid {shell_border}; border-radius:9px; }}"
+        f"QFrame#composerShell:focus-within {{ border:1px solid {shell_focus}; }}"
     )
 
 

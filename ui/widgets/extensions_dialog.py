@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
 )
 
 from services.tool_registry import ExtensionFileSummary, ExtensionOverview
-from ui.theme import palette, chat_font_pt, meta_font_pt
+from ui.theme import palette, chat_font_pt, meta_font_pt, apply_flat_tab_style
 
 
 class ExtensionsDialog(QDialog):
@@ -45,7 +45,7 @@ class ExtensionsDialog(QDialog):
         root.addWidget(summary)
 
         tabs = QTabWidget()
-        tabs.setDocumentMode(True)
+        apply_flat_tab_style(tabs, "extensionsTabs")
         root.addWidget(tabs, 1)
 
         if overview.files:

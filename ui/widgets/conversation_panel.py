@@ -15,6 +15,9 @@ from ui.theme import (
     new_chat_button_style, search_field_style, conversation_list_style,
 )
 
+_ROLE_PATH = Qt.ItemDataRole.UserRole
+_ROLE_CONV_ID = Qt.ItemDataRole.UserRole + 1
+
 
 class TitleLabel(QLabel):
     """Single-line title; paints elided text so QListWidget layouts cannot wrap it."""
@@ -106,8 +109,8 @@ class ConversationItem(QWidget):
         self._pinned = pinned
 
         row = QHBoxLayout(self)
-        row.setContentsMargins(8, 8, 4, 8)
-        row.setSpacing(4)
+        row.setContentsMargins(9, 7, 6, 7)
+        row.setSpacing(6)
 
         col = QVBoxLayout()
         col.setSpacing(2)
@@ -129,7 +132,7 @@ class ConversationItem(QWidget):
         row.addLayout(col, 1)
 
         self.pin_btn = QLabel("★" if pinned else "☆")
-        self.pin_btn.setFixedSize(20, 20)
+        self.pin_btn.setFixedSize(18, 18)
         self.pin_btn.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.pin_btn.setToolTip("Unpin" if pinned else "Pin")
         self.pin_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -137,7 +140,7 @@ class ConversationItem(QWidget):
         row.addWidget(self.pin_btn)
 
         self.del_btn = QLabel("✕")
-        self.del_btn.setFixedSize(20, 20)
+        self.del_btn.setFixedSize(18, 18)
         self.del_btn.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.del_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.del_btn.mousePressEvent = lambda e: self.delete_requested.emit()
@@ -156,7 +159,8 @@ class ConversationItem(QWidget):
         meta = meta_font_pt()
         pin_color = "#f5c518" if self._pinned else p["TEXT_DIM"]
         self.title_lbl.setStyleSheet(
-            f"font-size:{fs}px; color:{p['TEXT']}; background:transparent;"
+            f"font-size:{max(12, fs - 1)}px; color:{p['TEXT']};"
+            "background:transparent; font-weight:500;"
         )
         self.title_lbl.apply_font()
         self.title_edit.setStyleSheet(
@@ -166,7 +170,7 @@ class ConversationItem(QWidget):
         self.date_lbl.setStyleSheet(
             f"font-size:{meta}px; color:{p['TEXT_DIM']}; background:transparent;"
         )
-        icon_fs = max(11, meta)
+        icon_fs = max(10, meta)
         self.pin_btn.setStyleSheet(
             f"QLabel {{ color:{pin_color}; background:transparent; font-size:{icon_fs}px; }}"
             "QLabel:hover { color:#f5c518; }"
@@ -226,7 +230,7 @@ def _conversation_item_height() -> int:
     date_font = app_font()
     date_font.setPointSize(meta)
     date_fm = QFontMetrics(date_font)
-    return 8 + 8 + title_fm.lineSpacing() + 2 + date_fm.lineSpacing() + 4
+    return 7 + 7 + title_fm.lineSpacing() + 1 + date_fm.lineSpacing()
 
 
 class ConversationPanel(QWidget):
@@ -244,7 +248,7 @@ class ConversationPanel(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        self._new_btn = QPushButton("＋  New Chat")
+        self._new_btn = QPushButton("+  New Chat")
         self._new_btn.clicked.connect(self.new_chat)
         root.addWidget(self._new_btn)
 
@@ -303,15 +307,19 @@ class ConversationPanel(QWidget):
         if self._editing_item is not None:
             self._editing_item.cancel_edit()
             self._editing_item = None
-        path = item.data(Qt.ItemDataRole.UserRole)
+        path = item.data(_ROLE_PATH)
         if path:
             self.selected.emit(str(path))
 
-    def refresh(self):
+    def refresh(self, selected_id: str | None = None):
         self._editing_item = None
         current_path = None
+        current_id = None
         if self.list.currentItem():
-            current_path = self.list.currentItem().data(Qt.ItemDataRole.UserRole)
+            current_path = self.list.currentItem().data(_ROLE_PATH)
+            current_id = self.list.currentItem().data(_ROLE_CONV_ID)
+        target_id = str(selected_id) if selected_id else (str(current_id) if current_id else None)
+        target_path = None if selected_id else (str(current_path) if current_path else None)
 
         query = self.search.text().strip()
         self.list.clear()
@@ -331,7 +339,9 @@ class ConversationPanel(QWidget):
                 date_str = ""
 
             item = QListWidgetItem()
-            item.setData(Qt.ItemDataRole.UserRole, str(path))
+            conv_id = str(data.get("id") or Path(path).stem)
+            item.setData(_ROLE_PATH, str(path))
+            item.setData(_ROLE_CONV_ID, conv_id)
             item.setSizeHint(QSize(0, _conversation_item_height()))
             self.list.addItem(item)
 
@@ -343,7 +353,7 @@ class ConversationPanel(QWidget):
             widget.edit_started.connect(self._on_edit_started)
             self.list.setItemWidget(item, widget)
 
-            if str(path) == current_path:
+            if (target_id and conv_id == target_id) or (target_path and str(path) == target_path):
                 self.list.setCurrentItem(item)
 
             visible += 1
@@ -351,6 +361,25 @@ class ConversationPanel(QWidget):
         show_empty = bool(query) and visible == 0
         self.no_results.setVisible(show_empty)
         self.list.setVisible(not show_empty)
+
+    def select_conversation(self, conv_id: str):
+        if not conv_id:
+            return
+        wanted = str(conv_id)
+        for i in range(self.list.count()):
+            item = self.list.item(i)
+            if item.data(_ROLE_CONV_ID) == wanted:
+                self.list.setCurrentItem(item)
+                return
+        if self.search.text():
+            self.search.blockSignals(True)
+            self.search.clear()
+            self.search.blockSignals(False)
+        self.refresh(selected_id=wanted)
+
+    def clear_selection(self):
+        self.list.clearSelection()
+        self.list.setCurrentRow(-1)
 
     def _delete(self, path: str):
         try:

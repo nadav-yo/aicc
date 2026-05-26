@@ -1,15 +1,41 @@
 import re
 from pathlib import Path
 
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTextEdit, QPushButton
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTextEdit, QPushButton, QFrame
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QImage, QPixmap, QDragEnterEvent, QDropEvent, QTextCursor
+from PyQt6.QtGui import (
+    QImage, QPixmap, QDragEnterEvent, QDropEvent, QTextCursor,
+    QSyntaxHighlighter, QTextCharFormat, QColor, QFont,
+)
 
 from config import MAX_INLINE_IMAGE_DIMENSION
 from services.content import encode_image
-from ui.theme import composer_style, chat_font_pt, palette, ACCENT
+from ui.theme import (
+    composer_reference_colors, composer_shell_style, composer_style,
+    chat_font_pt, palette, ACCENT,
+)
 
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
+_REFERENCE_RE = re.compile(r'(?<!\S)@(?:"[^"]+"|[^\s@]+)')
+
+
+class _ReferenceHighlighter(QSyntaxHighlighter):
+    def __init__(self, document):
+        super().__init__(document)
+        self._fmt = QTextCharFormat()
+        self.apply_appearance()
+
+    def apply_appearance(self):
+        colors = composer_reference_colors()
+        self._fmt = QTextCharFormat()
+        self._fmt.setForeground(QColor(colors["fg"]))
+        self._fmt.setBackground(QColor(colors["bg"]))
+        self._fmt.setFontWeight(QFont.Weight.DemiBold)
+        self.rehighlight()
+
+    def highlightBlock(self, text: str):
+        for match in _REFERENCE_RE.finditer(text):
+            self.setFormat(match.start(), match.end() - match.start(), self._fmt)
 
 
 def _path_is_image(path: str) -> bool:
@@ -57,12 +83,13 @@ class MessageInput(QTextEdit):
         super().__init__(parent)
         self.setPlaceholderText("Message…")
         self.setAcceptRichText(False)
-        self.setFixedHeight(72)
+        self.setFixedHeight(46)
         self._in_slash_mode = False
         self._in_mention_mode = False
         self._mention_start = -1
         self._enter_to_send = False
         self.setAcceptDrops(True)
+        self._reference_highlighter = _ReferenceHighlighter(self.document())
         self._apply_style()
         self.textChanged.connect(self._on_text_changed)
 
@@ -74,6 +101,7 @@ class MessageInput(QTextEdit):
 
     def apply_appearance(self):
         self.setStyleSheet(composer_style())
+        self._reference_highlighter.apply_appearance()
 
     def set_enter_to_send(self, enabled: bool):
         self._enter_to_send = enabled
@@ -338,6 +366,16 @@ class ComposerWidget(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(4)
 
+        self._shell = QFrame()
+        self._shell.setObjectName("composerShell")
+        shell_layout = QHBoxLayout(self._shell)
+        shell_layout.setContentsMargins(10, 6, 10, 6)
+        shell_layout.setSpacing(10)
+
+        field_col = QVBoxLayout()
+        field_col.setContentsMargins(0, 0, 0, 0)
+        field_col.setSpacing(4)
+
         # skill chip row
         self._skill_row = QWidget()
         chip_layout = QHBoxLayout(self._skill_row)
@@ -356,9 +394,19 @@ class ComposerWidget(QWidget):
         self.input.send_requested.connect(self.send_requested.emit)
         self.input.image_pasted.connect(self.strip.add_image)
 
-        root.addWidget(self._skill_row)
-        root.addWidget(self.strip)
-        root.addWidget(self.input)
+        field_col.addWidget(self._skill_row)
+        field_col.addWidget(self.strip)
+        field_col.addWidget(self.input)
+
+        self.action_row = QHBoxLayout()
+        self.action_row.setContentsMargins(0, 0, 0, 0)
+        self.action_row.setSpacing(6)
+
+        shell_layout.addLayout(field_col, 1)
+        shell_layout.addLayout(self.action_row, 0)
+        root.addWidget(self._shell)
+
+        self.apply_appearance()
 
     def text(self) -> str:
         return self.input.toPlainText().strip()
@@ -401,6 +449,7 @@ class ComposerWidget(QWidget):
         return self._active_skill
 
     def apply_appearance(self):
+        self._shell.setStyleSheet(composer_shell_style())
         self.input.apply_appearance()
         for item in self.strip._items:
             item["widget"].apply_appearance()

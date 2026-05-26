@@ -14,6 +14,7 @@ from storage.settings import SettingsStore
 from ui.theme import (
     palette, ACCENT, git_status_color, icon_button_style, files_header_style,
     file_tree_sidebar_style, mono_font_pt, mono_font,
+    apply_flat_tab_style, sidebar_settings_button_style,
 )
 from ui.widgets.conversation_panel import ConversationPanel
 from ui.widgets.git_panel import GitPanel
@@ -274,7 +275,7 @@ class LeftPanel(QWidget):
         root.setSpacing(0)
 
         tabs = QTabWidget()
-        tabs.setDocumentMode(True)
+        self._tabs = tabs
 
         self._conv = ConversationPanel(store)
         self._conv.selected.connect(self.selected)
@@ -317,21 +318,17 @@ class LeftPanel(QWidget):
 
         self._settings_btn = QPushButton("⚙")
         self._settings_btn.setToolTip("Settings (⌘,)")
-        self._settings_btn.setFixedHeight(36)
+        self._settings_btn.setFixedHeight(34)
         self._settings_btn.clicked.connect(self.open_settings)
         root.addWidget(self._settings_btn)
 
         self._apply_styles()
 
     def _apply_styles(self):
-        p = palette()
+        apply_flat_tab_style(self._tabs, "sidebarTabs")
         self._files_header.apply_appearance()
         self._git_header.apply_appearance()
-        self._settings_btn.setStyleSheet(
-            f"QPushButton {{ background:{p['BG2']}; color:{p['TEXT_DIM']}; border:none;"
-            f"border-top:1px solid {p['BORDER_SUBTLE']}; font-size:18px; padding:10px; }}"
-            f"QPushButton:hover {{ background:{p['BG3']}; color:{p['TEXT']}; }}"
-        )
+        self._settings_btn.setStyleSheet(sidebar_settings_button_style())
 
     def apply_appearance(self):
         self._apply_styles()
@@ -352,6 +349,12 @@ class LeftPanel(QWidget):
 
     def refresh(self):
         self._conv.refresh()
+
+    def select_conversation(self, conv_id: str):
+        self._conv.select_conversation(conv_id)
+
+    def clear_conversation_selection(self):
+        self._conv.clear_selection()
 
     def mark_file_touched(self, path: str):
         self._file_tree.mark_touched(path)

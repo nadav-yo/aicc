@@ -29,7 +29,7 @@ from storage.settings import SettingsStore
 from ui.avatars import avatar_pixmap, clear_cache, persist_portrait
 from ui.theme import (
     ACCENT, palette, DEFAULT_FONT_SIZE, DEFAULT_THEME,
-    crew_tone,
+    apply_flat_tab_style, crew_tone, separator_color,
 )
 
 _NAV = [
@@ -717,7 +717,7 @@ class SettingsDialog(QDialog):
         self._nav.setFixedWidth(148)
         self._nav.setSpacing(0)
         self._nav.setStyleSheet(
-            f"QListWidget {{ background:{p['BG']}; border:none; border-right:1px solid {p['BORDER']};"
+            f"QListWidget {{ background:{p['BG']}; border:none; border-right:1px solid {separator_color()};"
             f"padding:8px 6px; outline:none; }}"
             f"QListWidget::item {{ color:{p['TEXT_DIM']}; padding:10px 12px 10px 15px; border-radius:6px;"
             f"border-left:3px solid transparent; }}"
@@ -747,7 +747,7 @@ class SettingsDialog(QDialog):
         # ── footer ────────────────────────────────────────────────────────
         footer = QFrame()
         footer.setStyleSheet(
-            f"QFrame {{ background:{p['BG2']}; border-top:1px solid {p['BORDER']}; }}"
+            f"QFrame {{ background:{p['BG2']}; border-top:1px solid {separator_color()}; }}"
         )
         buttons = QHBoxLayout(footer)
         buttons.setContentsMargins(16, 10, 16, 10)
@@ -796,7 +796,10 @@ class SettingsDialog(QDialog):
     def _section_separator(self) -> QFrame:
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setStyleSheet(f"background:{palette()['BORDER']}; max-height:1px;")
+        sep_color = separator_color()
+        sep.setStyleSheet(
+            f"background:{sep_color}; color:{sep_color}; border:none; max-height:1px;"
+        )
         return sep
 
     def _page_general(self, saved: dict) -> QWidget:
@@ -868,9 +871,9 @@ class SettingsDialog(QDialog):
         self.providers_table.row_moved.connect(self._move_provider)
         self.providers_table.setStyleSheet(
             f"QTableWidget {{ background:{palette()['BG2']}; color:{palette()['TEXT']};"
-            f"border:1px solid {palette()['BORDER']}; border-radius:8px; gridline-color:{palette()['BORDER']}; }}"
+            f"border:1px solid {separator_color()}; border-radius:8px; gridline-color:{palette()['BORDER']}; }}"
             f"QHeaderView::section {{ background:{palette()['BG3']}; color:{palette()['TEXT_DIM']};"
-            f"border:none; border-bottom:1px solid {palette()['BORDER']}; padding:6px; }}"
+            f"border:none; border-bottom:1px solid {separator_color()}; padding:6px; }}"
         )
         header = self.providers_table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
@@ -1143,15 +1146,9 @@ class SettingsDialog(QDialog):
             "Configure aicc and each optional crew member's voice, model, color, and portrait.",
         )
         self._crew_widgets = {}
-        tabs = QTabWidget()
         p = palette()
-        tabs.setStyleSheet(
-            f"QTabWidget {{ background:{p['BG2']}; }}"
-            f"QTabWidget::pane {{ border:1px solid {p['BORDER']}; background:{p['BG2']}; }}"
-            f"QTabBar::tab {{ background:{p['BG']}; color:{p['TEXT_DIM']};"
-            f"border:1px solid {p['BORDER']}; padding:8px 12px; }}"
-            f"QTabBar::tab:selected {{ background:{p['BG2']}; color:{p['TEXT']}; }}"
-        )
+        tabs = QTabWidget()
+        apply_flat_tab_style(tabs, "crewSettingsTabs")
 
         lead_tab = QWidget()
         lead_layout = QVBoxLayout(lead_tab)
@@ -1263,6 +1260,7 @@ class SettingsDialog(QDialog):
             }
             card_layout.addStretch()
             tabs.addTab(tab, member.name)
+        layout.addWidget(self._section_separator())
         layout.addWidget(tabs, 1)
         layout.addStretch()
         return page
