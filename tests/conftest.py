@@ -48,9 +48,13 @@ def isolate_aichs_home(monkeypatch, tmp_path):
     monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
     settings_dir = home / ".aichs"
     settings_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("config.AICHS_HOME", settings_dir)
     monkeypatch.setattr("config.SETTINGS_PATH", settings_dir / "settings.json")
     monkeypatch.setattr("config.CONV_DIR", settings_dir / "conversations")
     monkeypatch.setattr("config.AVATARS_DIR", settings_dir / "avatars")
+    monkeypatch.setattr("config.WORKSPACES_PATH", settings_dir / "workspaces.json")
+    monkeypatch.setattr("storage.repository.AICHS_HOME", settings_dir)
+    monkeypatch.setattr("storage.repository.WORKSPACES_PATH", settings_dir / "workspaces.json")
     monkeypatch.setattr("storage.settings.SETTINGS_PATH", settings_dir / "settings.json")
     monkeypatch.setattr("services.skills._USER_DIR", settings_dir / "skills")
     monkeypatch.setattr("services.model_registry._MODELS_PATH", settings_dir / "models.json")

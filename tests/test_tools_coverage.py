@@ -12,6 +12,7 @@ import pytest
 from config import MAX_TOOL_OUTPUT_CHARS, MAX_TOOL_OUTPUT_LINES, MAX_TOOL_READ_BYTES
 from services.tool_registry import ToolContext
 from services.shell_tool import shell_tool_name
+from storage.repository import ConversationStore
 from services.tools import (
     _shell_tool_description,
     _display_path,
@@ -340,12 +341,16 @@ class TestSearchProjectChats:
         data.update(overrides)
         (conv_dir / f"{conv_id}.json").write_text(json.dumps(data), encoding="utf-8")
 
-    def test_search_project_chats_finds_project_and_legacy(self, cwd, workspace, tmp_path, monkeypatch):
-        conv_dir = tmp_path / "conversations"
-        conv_dir.mkdir()
-        monkeypatch.setattr("services.tools.config.CONV_DIR", conv_dir)
-        self._write_chat(conv_dir, "project", cwd=str(workspace), title="Playwright plan")
-        self._write_chat(conv_dir, "legacy", title="Legacy note")
+    def test_search_project_chats_finds_workspace_chat(self, cwd, workspace, tmp_path, conv_dir):
+        store = ConversationStore(cwd)
+        store.save("project", {
+            "id": "project",
+            "title": "Playwright plan",
+            "created_at": "2026-01-01T10:00:00",
+            "updated_at": "2026-01-01T11:00:00",
+            "cwd": str(workspace),
+            "messages": [{"role": "user", "content": "we discussed playwright testing"}],
+        })
         self._write_chat(
             conv_dir,
             "other",
@@ -353,32 +358,46 @@ class TestSearchProjectChats:
             title="Other project",
             messages=[{"role": "user", "content": "playwright elsewhere"}],
         )
+        self._write_chat(conv_dir, "unscoped", title="Unscoped note")
 
         out = execute("search_project_chats", {"query": "have we discussed using playwright", "limit": 5}, cwd)
+
         assert "Playwright plan" in out
-        assert "Legacy note" in out
         assert "Other project" not in out
-        assert "legacy unscoped" in out
+        assert "Unscoped note" not in out
+        assert "current workspace" in out
+
+    def test_search_project_chats_ignores_global_unscoped(self, cwd, tmp_path, monkeypatch):
+        conv_dir = tmp_path / "conversations"
+        conv_dir.mkdir()
+        monkeypatch.setattr("storage.repository.CONV_DIR", conv_dir)
+        self._write_chat(conv_dir, "legacy", title="Legacy note")
+
+        out = _search_project_chats("playwright", cwd)
+
+        assert "(no saved conversations)" in out
 
     def test_search_project_chats_empty_and_missing(self, cwd, tmp_path, monkeypatch):
-        monkeypatch.setattr("services.tools.config.CONV_DIR", tmp_path / "missing")
+        monkeypatch.setattr("storage.repository.CONV_DIR", tmp_path / "missing")
         assert "(no saved conversations)" in _search_project_chats("playwright", cwd)
         assert "requires a query" in execute("search_project_chats", {"query": ""}, cwd)
 
-    def test_read_project_chat_exact_reference(self, cwd, workspace, tmp_path, monkeypatch):
-        conv_dir = tmp_path / "conversations"
-        conv_dir.mkdir()
-        monkeypatch.setattr("services.tools.config.CONV_DIR", conv_dir)
-        self._write_chat(
-            conv_dir,
+    def test_read_project_chat_exact_reference(self, cwd, workspace):
+        store = ConversationStore(cwd)
+        store.save(
             "exact",
-            cwd=str(workspace),
-            title="Exact notes",
-            messages=[
-                {"role": "user", "content": "old setup"},
-                {"role": "user", "content": "first decision"},
-                {"role": "assistant", "content": "second answer"},
-            ],
+            {
+                "id": "exact",
+                "created_at": "2026-01-01T10:00:00",
+                "updated_at": "2026-01-01T11:00:00",
+                "cwd": str(workspace),
+                "title": "Exact notes",
+                "messages": [
+                    {"role": "user", "content": "old setup"},
+                    {"role": "user", "content": "first decision"},
+                    {"role": "assistant", "content": "second answer"},
+                ],
+            },
         )
 
         out = execute("read_project_chat", {"conversation_id": "exact", "max_messages": 2}, cwd)
@@ -389,14 +408,20 @@ class TestSearchProjectChats:
         assert "user: first decision" in out
         assert "assistant: second answer" in out
 
-    def test_read_project_chat_guards_missing_and_other_workspace(self, cwd, workspace, tmp_path, monkeypatch):
+    def test_read_project_chat_guards_missing_and_global_other_workspace(self, cwd, workspace, tmp_path, monkeypatch):
         conv_dir = tmp_path / "conversations"
         conv_dir.mkdir()
-        monkeypatch.setattr("services.tools.config.CONV_DIR", conv_dir)
+        monkeypatch.setattr("storage.repository.CONV_DIR", conv_dir)
         self._write_chat(conv_dir, "other", cwd=str(tmp_path / "other"))
+        ConversationStore(cwd).save("current", {
+            "id": "current",
+            "title": "Current workspace",
+            "cwd": str(workspace),
+            "messages": [{"role": "user", "content": "hello"}],
+        })
 
         assert "requires a conversation_id" in execute("read_project_chat", {"conversation_id": ""}, cwd)
-        assert "belongs to another workspace" in _read_project_chat("other", cwd)
+        assert "Conversation not found" in _read_project_chat("other", cwd)
         assert "Conversation not found" in _read_project_chat("missing", cwd)
 
 

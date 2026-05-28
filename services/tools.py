@@ -14,7 +14,6 @@ _ANSI_ESCAPE_RE = re.compile(
 )
 _ORPHAN_SGR_RE = re.compile(r"(?m)^(?:\[[0-9;]*m)+")
 
-import config
 from config import (
     DEFAULT_READ_FILE_LINES,
     IGNORED,
@@ -25,6 +24,7 @@ from config import (
 )
 from services.shell_tool import shell_tool_name
 from services.content import is_visible_message
+from storage.repository import project_conversation_records, workspace_id
 from services.subprocess_utils import popen_no_window, run_no_window
 from services.tool_policy import resolve_path, validate_tool_paths
 from services.tool_registry import ToolContext, ToolRegistry, load_extensions
@@ -728,17 +728,13 @@ def _search_project_chats(query: str, cwd: str, limit=None) -> str:
         max_results = 5
     max_results = max(1, min(10, max_results))
 
-    conv_dir = Path(config.CONV_DIR)
-    if not conv_dir.exists():
+    records = project_conversation_records(cwd)
+    if not records:
         return "(no saved conversations)"
 
     cwd_path = Path(cwd).resolve()
     matches = []
-    for path in sorted(conv_dir.glob("*.json")):
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
+    for path, data in records:
         scope = _conversation_project_scope(data, cwd_path)
         if scope is None:
             continue
@@ -748,7 +744,14 @@ def _search_project_chats(query: str, cwd: str, limit=None) -> str:
         if not snippets and not title_hit:
             continue
         score = (4 if title_hit else 0) + len(snippets)
-        matches.append((score, str(data.get("updated_at") or ""), path, data, scope, snippets))
+        matches.append((
+            score,
+            str(data.get("updated_at") or ""),
+            path,
+            data,
+            scope,
+            snippets,
+        ))
 
     if not matches:
         return f"(no matches for {query!r} in project chat history)"
@@ -758,8 +761,7 @@ def _search_project_chats(query: str, cwd: str, limit=None) -> str:
     for idx, (_score, _updated, path, data, scope, snippets) in enumerate(matches[:max_results], start=1):
         title = str(data.get("title") or "Untitled")
         updated = str(data.get("updated_at") or data.get("created_at") or "unknown date")
-        scope_note = "current project" if scope == "project" else "legacy unscoped"
-        lines.append(f"\n{idx}. {title} ({updated}, {scope_note}, id: {data.get('id') or path.stem})")
+        lines.append(f"\n{idx}. {title} ({updated}, current workspace, id: {data.get('id') or path.stem})")
         if snippets:
             for snippet in snippets[:3]:
                 lines.append(f"   - {snippet}")
@@ -778,17 +780,13 @@ def _read_project_chat(conversation_id: str, cwd: str, max_messages=None) -> str
         limit = 20
     limit = max(1, min(50, limit))
 
-    conv_dir = Path(config.CONV_DIR)
-    if not conv_dir.exists():
+    records = project_conversation_records(cwd)
+    if not records:
         return "(no saved conversations)"
 
     cwd_path = Path(cwd).resolve()
     found = None
-    for path in sorted(conv_dir.glob("*.json")):
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
+    for path, data in records:
         conv_id = str(data.get("id") or path.stem)
         if conv_id != wanted and path.stem != wanted:
             continue
@@ -804,12 +802,11 @@ def _read_project_chat(conversation_id: str, cwd: str, max_messages=None) -> str
     path, data, scope = found
     title = str(data.get("title") or "Untitled")
     updated = str(data.get("updated_at") or data.get("created_at") or "unknown date")
-    scope_note = "current project" if scope == "project" else "legacy unscoped"
     lines = [
         f"Conversation: {title}",
         f"ID: {data.get('id') or path.stem}",
         f"Updated: {updated}",
-        f"Scope: {scope_note}",
+        "Scope: current workspace",
         "",
         "Visible transcript:",
     ]
@@ -835,9 +832,12 @@ def _read_project_chat(conversation_id: str, cwd: str, max_messages=None) -> str
 
 
 def _conversation_project_scope(data: dict, cwd_path: Path) -> str | None:
+    saved_workspace_id = str(data.get("workspace_id") or "").strip()
+    if saved_workspace_id and saved_workspace_id == workspace_id(cwd_path):
+        return "project"
     saved_cwd = str(data.get("cwd") or "").strip()
     if not saved_cwd:
-        return "legacy"
+        return None
     try:
         if Path(saved_cwd).resolve() == cwd_path:
             return "project"

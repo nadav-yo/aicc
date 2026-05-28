@@ -14,20 +14,45 @@ from ui.widgets.file_viewer import FileViewerPanel
 from ui.widgets.command_palette import CommandPalette
 
 
+def _startup_workspace(
+    saved: dict,
+    startup_workspace: str | None = None,
+    *,
+    prefer_saved_workspace: bool = False,
+    launch_cwd: str | None = None,
+) -> str:
+    if startup_workspace:
+        return os.path.abspath(startup_workspace)
+    if prefer_saved_workspace:
+        workspace = saved.get("workspace_path", "")
+        if workspace and os.path.isdir(workspace):
+            return os.path.abspath(workspace)
+    return os.path.abspath(launch_cwd or os.getcwd())
+
+
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(
+        self,
+        startup_workspace: str | None = None,
+        *,
+        prefer_saved_workspace: bool = False,
+    ):
         super().__init__()
         self.setWindowTitle("AICHS")
 
         self._settings = SettingsStore()
         saved = self._settings.load()
 
-        workspace = saved.get("workspace_path", "")
-        if workspace and os.path.isdir(workspace):
-            os.chdir(workspace)
+        os.chdir(
+            _startup_workspace(
+                saved,
+                startup_workspace,
+                prefer_saved_workspace=prefer_saved_workspace,
+            )
+        )
 
-        store = ConversationStore()
         repo  = os.getcwd()
+        store = ConversationStore(repo)
 
         self._outer = QSplitter(Qt.Orientation.Horizontal)
 

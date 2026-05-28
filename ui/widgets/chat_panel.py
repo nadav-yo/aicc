@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QPoint, QPointF, QSize, QTimer, pyqtSignal, QThread
 from PyQt6.QtGui import QColor, QGuiApplication, QIcon, QPainter, QPainterPath, QPen, QPixmap
 
-from config import CONV_DIR, IGNORED, MAX_FILE_PREVIEW_BYTES, MAX_TOOL_READ_BYTES
+from config import IGNORED, MAX_FILE_PREVIEW_BYTES, MAX_TOOL_READ_BYTES
 from config import MODELS, MODEL_PROVIDER
 from storage.repository import ConversationStore
 from storage.settings import SettingsStore
@@ -1654,7 +1654,7 @@ class ChatPanel(QWidget):
             self._save(touch_updated=True)
             self._maybe_auto_title()
         else:
-            data = self.store.load(str(CONV_DIR / f"{conv_id}.json"))
+            data = self.store.load_by_id(conv_id)
             history = prepare_for_storage(data.get("messages", []))
             history.append(msg)
             data["messages"] = prepare_for_storage(history)

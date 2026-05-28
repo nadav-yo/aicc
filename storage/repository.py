@@ -1,23 +1,31 @@
 import json
+import os
+import re
+import hashlib
 from datetime import datetime
 from pathlib import Path
 
-from config import CONV_DIR
+from config import AICHS_HOME, CONV_DIR, WORKSPACES_PATH
 from services.content import is_visible_message
 
 
 class ConversationStore:
-    def __init__(self):
-        CONV_DIR.mkdir(parents=True, exist_ok=True)
+    def __init__(self, workspace: str | None = None):
+        self.workspace = _resolve_workspace(workspace)
+        self.workspace_id = workspace_id(self.workspace) if self.workspace else ""
+        self.conv_dir = (
+            workspace_conversations_dir(self.workspace)
+            if self.workspace
+            else CONV_DIR
+        )
+        self.conv_dir.mkdir(parents=True, exist_ok=True)
+        if self.workspace:
+            _register_workspace(self.workspace, self.workspace_id)
         _prune_leaked_test_conversations()
 
     def list_all(self) -> list[tuple[Path, dict]]:
         by_id: dict[str, tuple[Path, dict]] = {}
-        for p in CONV_DIR.glob("*.json"):
-            try:
-                data = json.loads(p.read_text(encoding="utf-8"))
-            except Exception:
-                continue
+        for p, data in self.iter_records():
             summary = _summary(data)
             conv_id = summary.get("id") or p.stem
             summary["id"] = conv_id
@@ -45,10 +53,20 @@ class ConversationStore:
 
     def save(self, conv_id: str, data: dict) -> Path:
         data["id"] = conv_id
-        path = CONV_DIR / f"{conv_id}.json"
+        if self.workspace:
+            data["workspace_id"] = self.workspace_id
+            data.setdefault("cwd", str(self.workspace))
+        path = self.conv_dir / f"{conv_id}.json"
         path.write_text(json.dumps(data, indent=2), encoding="utf-8")
         self._drop_duplicate_files(conv_id, keep=path)
         return path
+
+    def load_by_id(self, conv_id: str) -> dict:
+        wanted = str(conv_id or "").strip()
+        for path, data in self.iter_records():
+            if str(data.get("id") or path.stem) == wanted or path.stem == wanted:
+                return data
+        raise FileNotFoundError(wanted)
 
     def rename(self, path: str, title: str) -> str:
         data = self.load(path)
@@ -60,7 +78,7 @@ class ConversationStore:
 
     def _drop_duplicate_files(self, conv_id: str, *, keep: Path) -> None:
         keep_resolved = keep.resolve()
-        for p in CONV_DIR.glob("*.json"):
+        for p in self.conv_dir.glob("*.json"):
             if p.resolve() == keep_resolved:
                 continue
             try:
@@ -100,6 +118,35 @@ class ConversationStore:
                 return True
         return False
 
+    def iter_records(self) -> list[tuple[Path, dict]]:
+        records: list[tuple[Path, dict]] = []
+        for path in sorted(self.conv_dir.glob("*.json")):
+            data = _load_json(path)
+            if data is None:
+                continue
+            records.append((path, data))
+        return records
+
+def workspace_id(workspace: str | Path) -> str:
+    path = Path(workspace).expanduser().resolve()
+    name = path.name or "workspace"
+    slug = re.sub(r"[^a-zA-Z0-9._-]+", "-", name).strip(".-").lower() or "workspace"
+    slug = slug[:48].rstrip(".-") or "workspace"
+    digest = hashlib.sha1(os.path.normcase(str(path)).encode("utf-8")).hexdigest()[:10]
+    return f"{slug}-{digest}"
+
+
+def workspace_data_dir(workspace: str | Path) -> Path:
+    return AICHS_HOME / workspace_id(workspace)
+
+
+def workspace_conversations_dir(workspace: str | Path) -> Path:
+    return workspace_data_dir(workspace) / "conversations"
+
+
+def project_conversation_records(cwd: str) -> list[tuple[Path, dict]]:
+    return ConversationStore(cwd).iter_records()
+
 
 def _message_text(content) -> str:
     if isinstance(content, str):
@@ -118,12 +165,43 @@ def _message_text(content) -> str:
     return str(content)
 
 
+def _resolve_workspace(workspace: str | None) -> Path | None:
+    if not workspace:
+        return None
+    return Path(workspace).expanduser().resolve()
+
+
+def _load_json(path: Path) -> dict | None:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _register_workspace(workspace: Path, wid: str) -> None:
+    WORKSPACES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    data = _load_json(WORKSPACES_PATH)
+    if not isinstance(data, dict):
+        data = {}
+    workspaces = data.get("workspaces")
+    if not isinstance(workspaces, dict):
+        workspaces = {}
+    workspaces[wid] = {
+        "id": wid,
+        "path": str(workspace),
+        "name": workspace.name or str(workspace),
+        "updated_at": datetime.now().isoformat(),
+    }
+    data["version"] = 1
+    data["workspaces"] = workspaces
+    WORKSPACES_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
 def _prune_leaked_test_conversations() -> None:
     """Remove c1/First fixture files if pytest ever wrote them to the real ~/.aichs dir."""
     for p in list(CONV_DIR.glob("*.json")):
-        try:
-            data = json.loads(p.read_text(encoding="utf-8"))
-        except Exception:
+        data = _load_json(p)
+        if data is None:
             continue
         if (
             data.get("id") == "c1"

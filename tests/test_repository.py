@@ -1,8 +1,15 @@
 import json
+from pathlib import Path
 
 import pytest
 
-from storage.repository import ConversationStore, _message_text, _summary
+from storage.repository import (
+    ConversationStore,
+    workspace_conversations_dir,
+    workspace_id,
+    _message_text,
+    _summary,
+)
 
 
 def _sample_conv(conv_id: str = "20260101_120000", **overrides) -> dict:
@@ -116,6 +123,76 @@ class TestConversationStore:
         assert store.matches_search(path, summary, "First")
         assert not store.matches_search(path, summary, "runtime")
         assert not store.matches_search(path, summary, "missing")
+
+    def test_workspace_store_uses_workspace_id_directory(self, tmp_path):
+        workspace = tmp_path / "repo"
+        workspace.mkdir()
+        store = ConversationStore(str(workspace))
+
+        path = store.save("x", _sample_conv("x"))
+
+        assert path == workspace_conversations_dir(workspace) / "x.json"
+        assert path.exists()
+        assert path.parts[-3:] == (workspace_id(workspace), "conversations", "x.json")
+        data = store.load(str(path))
+        assert data["workspace_id"] == workspace_id(workspace)
+        assert Path(data["cwd"]) == workspace.resolve()
+
+    def test_workspace_store_writes_registry(self, tmp_path, isolate_aichs_home):
+        from storage import repository
+
+        workspace = tmp_path / "repo"
+        workspace.mkdir()
+        store = ConversationStore(str(workspace))
+        store.save("x", _sample_conv("x"))
+
+        data = json.loads(repository.WORKSPACES_PATH.read_text(encoding="utf-8"))
+        wid = workspace_id(workspace)
+        assert data["version"] == 1
+        assert data["workspaces"][wid]["path"] == str(workspace.resolve())
+
+    def test_workspace_store_lists_only_its_workspace(self, tmp_path):
+        one = tmp_path / "one"
+        two = tmp_path / "two"
+        one.mkdir()
+        two.mkdir()
+
+        ConversationStore(str(one)).save("one-chat", _sample_conv("one-chat"))
+        ConversationStore(str(two)).save("two-chat", _sample_conv("two-chat"))
+
+        listed = ConversationStore(str(one)).list_all()
+
+        assert [summary["id"] for _, summary in listed] == ["one-chat"]
+
+    def test_workspace_store_ignores_global_conversations(self, tmp_path, conv_dir):
+        workspace = tmp_path / "repo"
+        other = tmp_path / "other"
+        workspace.mkdir()
+        other.mkdir()
+        (conv_dir / "current.json").write_text(
+            json.dumps(_sample_conv("current", cwd=str(workspace.resolve()))),
+            encoding="utf-8",
+        )
+        (conv_dir / "other.json").write_text(
+            json.dumps(_sample_conv("other", cwd=str(other.resolve()))),
+            encoding="utf-8",
+        )
+        (conv_dir / "unscoped.json").write_text(
+            json.dumps(_sample_conv("unscoped")),
+            encoding="utf-8",
+        )
+
+        listed = ConversationStore(str(workspace)).list_all()
+
+        assert listed == []
+
+    def test_load_by_id_finds_workspace_chat(self, tmp_path):
+        workspace = tmp_path / "repo"
+        workspace.mkdir()
+        store = ConversationStore(str(workspace))
+        store.save("x", _sample_conv("x", title="Workspace chat"))
+
+        assert store.load_by_id("x")["title"] == "Workspace chat"
 
 
 class TestHelpers:

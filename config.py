@@ -1,8 +1,10 @@
 from pathlib import Path
 
-CONV_DIR      = Path.home() / ".aichs" / "conversations"
-SETTINGS_PATH = Path.home() / ".aichs" / "settings.json"
-AVATARS_DIR   = Path.home() / ".aichs" / "avatars"
+AICHS_HOME      = Path.home() / ".aichs"
+CONV_DIR        = AICHS_HOME / "conversations"
+SETTINGS_PATH   = AICHS_HOME / "settings.json"
+AVATARS_DIR     = AICHS_HOME / "avatars"
+WORKSPACES_PATH = AICHS_HOME / "workspaces.json"
 IGNORED  = {".git", "__pycache__", "node_modules", ".venv", "venv", ".idea"}
 
 # Keep the desktop app responsive on large repos and noisy commands.

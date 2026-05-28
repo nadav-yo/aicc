@@ -13,6 +13,66 @@ aichs is early software. It is intended for developers who are comfortable
 running a local app that can read a workspace and, with approval, edit files or
 run shell commands.
 
+## Install From PyPI
+
+For normal use, install the published command with `pipx`:
+
+```bash
+pipx install aichs
+```
+
+Then start it from the repository you want to work in:
+
+```bash
+cd /path/to/your/repo
+aichs
+```
+
+On Windows, that looks like:
+
+```powershell
+cd C:\path\to\your\repo
+aichs
+```
+
+You can also pass the workspace explicitly:
+
+```bash
+aichs /path/to/your/repo
+aichs --workspace /path/to/your/repo
+```
+
+If you use `pip` instead of `pipx`, install with:
+
+```bash
+python -m pip install --user aichs
+```
+
+On Windows, make sure Python's user script directory is on `PATH`, for example
+`C:\Users\<you>\AppData\Roaming\Python\Python311\Scripts`.
+
+To upgrade an existing install:
+
+```bash
+pipx upgrade aichs
+```
+
+or, for a `pip --user` install:
+
+```bash
+python -m pip install --user --upgrade aichs
+```
+
+## Run
+
+By default, `aichs` honors the directory it was started from. Use
+`aichs --last-workspace` only when you want to reopen the previously saved
+workspace.
+
+Conversation history is stored in user data, not in your repository. Each
+workspace gets a stable entry in `~/.aichs/workspaces.json` and its chats are
+saved under `~/.aichs/<workspace_id>/conversations/`.
+
 ## Install From Source
 
 ```bash
