@@ -721,12 +721,17 @@ class ChatPanel(QWidget):
         images = self.composer.strip.images()
         if not text and not images:
             return
+        pasted_file_refs = (
+            self.composer.take_pasted_file_refs()
+            if hasattr(self.composer, "take_pasted_file_refs")
+            else []
+        )
 
         if text.startswith("!") and not images:
             self._run_user_terminal_from_input(text)
             return
 
-        files = _mentioned_files(self.cwd, text)
+        files = _message_files(self.cwd, text, pasted_file_refs)
 
         cmd = parse_builtin_command(text) if text and not images else None
         if cmd:
@@ -766,7 +771,7 @@ class ChatPanel(QWidget):
                 self._activate_extension_command(ext_cmd)
                 return
             text = trailing_text
-            files = _mentioned_files(self.cwd, text)
+            files = _message_files(self.cwd, text, pasted_file_refs)
             self.composer.set_skill(self._skill_from_extension_command(ext_cmd))
 
         draft = {
@@ -2659,7 +2664,7 @@ def _window_start(history: list[dict], end: int, byte_limit: int, message_limit:
     return start
 
 
-_MENTION_RE = re.compile(r'@(?:"([^"]+)"|([^\s]+))')
+_MENTION_RE = re.compile(r'@(?:"([^"]+)"|([^\s@]*[^\s@.,:;!?)\]}]))')
 
 
 def _list_mention_files(cwd: str, limit: int = 800) -> list[tuple[str, str]]:
@@ -2686,11 +2691,27 @@ def _list_mention_files(cwd: str, limit: int = 800) -> list[tuple[str, str]]:
 
 
 def _mentioned_files(cwd: str, text: str) -> list[dict]:
+    refs = [
+        (match.group(1) or match.group(2) or "").strip()
+        for match in _MENTION_RE.finditer(text)
+    ]
+    return _files_for_refs(cwd, refs)
+
+
+def _message_files(cwd: str, text: str, hidden_refs: list[str] | None = None) -> list[dict]:
+    refs = [
+        (match.group(1) or match.group(2) or "").strip()
+        for match in _MENTION_RE.finditer(text)
+    ]
+    refs.extend(hidden_refs or [])
+    return _files_for_refs(cwd, refs)
+
+
+def _files_for_refs(cwd: str, refs: list[str]) -> list[dict]:
     root = Path(cwd).resolve()
     seen: set[str] = set()
     files: list[dict] = []
-    for match in _MENTION_RE.finditer(text):
-        raw = (match.group(1) or match.group(2) or "").strip()
+    for raw in refs:
         if not raw or raw in seen:
             continue
         seen.add(raw)

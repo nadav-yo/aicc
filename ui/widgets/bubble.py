@@ -8,11 +8,17 @@ import markdown as _md
 from PyQt6.QtWidgets import (
     QFrame, QHBoxLayout, QVBoxLayout, QLabel, QSizePolicy, QMenu, QTextEdit,
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QSize
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QSize, QEvent
+from PyQt6.QtCore import QMimeData
 from PyQt6.QtGui import QPixmap, QAction, QGuiApplication
 
 from services.content import content_text, image_blocks
 from services.crew import crew_name_from_metadata
+from services.file_ref_clipboard import (
+    AICHS_MESSAGE_COPY_MIME,
+    file_ref_spans,
+    file_refs_payload,
+)
 from services.usage import usage_summary
 from ui.avatars import AVATAR_SIZE, avatar_label, avatar_pixmap
 from ui.theme import (
@@ -46,20 +52,58 @@ _EXT_LANG = {
     ".sql": "sql",
     ".xml": "xml",
 }
-_PATH_RE  = re.compile(
-    r"<code>([^<]*?(?:/[^<]*?\.(?:py|md|json|yaml|yml|toml|sh|js|ts|tsx|jsx|css|html|txt))[^<]*?)</code>"
-)
+_HTML_TOKEN_RE = re.compile(r"(<[^>]+>)")
 
 
-def _linkify_paths(html: str) -> str:
-    return _PATH_RE.sub(
-        lambda m: (
-            f'<code><a class="aichs-file-link" href="aichs-file:{m.group(1)}" '
-            f'style="{markdown_file_link_style()}">'
-            f'{m.group(1)}</a></code>'
-        ),
-        html,
-    )
+def _linkify_paths(rendered_html: str) -> str:
+    out: list[str] = []
+    ignored: list[str] = []
+    for token in _HTML_TOKEN_RE.split(rendered_html):
+        if not token:
+            continue
+        if token.startswith("<") and token.endswith(">"):
+            out.append(token)
+            _update_ignored_html_stack(token, ignored)
+        elif ignored:
+            out.append(token)
+        else:
+            out.append(_linkify_path_text(token))
+    return "".join(out)
+
+
+def _update_ignored_html_stack(tag: str, ignored: list[str]) -> None:
+    match = re.match(r"</?\s*([A-Za-z0-9]+)", tag)
+    if not match:
+        return
+    name = match.group(1).lower()
+    if name not in {"a", "style"}:
+        return
+    is_close = tag.startswith("</")
+    is_self_closing = tag.rstrip().endswith("/>")
+    if is_close:
+        if name in ignored:
+            ignored.remove(name)
+    elif not is_self_closing:
+        ignored.append(name)
+
+
+def _linkify_path_text(text: str) -> str:
+    spans = file_ref_spans(text)
+    if not spans:
+        return text
+    link_style = markdown_file_link_style()
+    parts: list[str] = []
+    last = 0
+    for start, end, ref in spans:
+        parts.append(text[last:start])
+        href = html.escape(f"aichs-file:{ref}", quote=True)
+        label = html.escape(ref)
+        parts.append(
+            f'<a class="aichs-file-link" href="{href}" style="{link_style}">{label}</a>'
+        )
+        last = end
+    parts.append(text[last:])
+    return "".join(parts)
 
 
 def _to_html(text: str) -> str:
@@ -67,7 +111,7 @@ def _to_html(text: str) -> str:
     return f"<style>{markdown_css()}</style>{_linkify_paths(body)}"
 
 
-_MENTION_RE = re.compile(r'@(?:"([^"]+)"|([^\s@]+))')
+_MENTION_RE = re.compile(r'@(?:"([^"]+)"|([^\s@]*[^\s@.,:;!?)\]}]))')
 
 
 def _linkify_user_text(text: str) -> str:
@@ -287,6 +331,7 @@ class MessageBubble(QFrame):
         self.label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         self.label.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.label.customContextMenuRequested.connect(self._context_menu)
+        self.label.installEventFilter(self)
         if is_user and not typing:
             self.label.mouseDoubleClickEvent = lambda e: self._start_edit()
 
@@ -479,7 +524,7 @@ class MessageBubble(QFrame):
         menu = QMenu(self)
         if self._copy_text:
             copy = QAction("Copy", self)
-            copy.triggered.connect(lambda: QGuiApplication.clipboard().setText(self._copy_text))
+            copy.triggered.connect(self._copy_to_clipboard)
             menu.addAction(copy)
         if self._history_index >= 0:
             if self._can_regenerate and not self._is_user and not self._typing:
@@ -499,6 +544,33 @@ class MessageBubble(QFrame):
             menu.addAction(branch)
         if menu.actions():
             menu.exec(self.label.mapToGlobal(pos))
+
+    def _copy_to_clipboard(self):
+        text = self._selected_or_copy_text()
+        mime = QMimeData()
+        mime.setText(text)
+        mime.setData(AICHS_MESSAGE_COPY_MIME, file_refs_payload(text))
+        QGuiApplication.clipboard().setMimeData(mime)
+
+    def eventFilter(self, obj, event):
+        if obj is self.label and event.type() == QEvent.Type.KeyPress:
+            copy_mods = (
+                Qt.KeyboardModifier.ControlModifier |
+                Qt.KeyboardModifier.MetaModifier
+            )
+            if event.key() == Qt.Key.Key_C and event.modifiers() & copy_mods:
+                self._copy_to_clipboard()
+                event.accept()
+                return True
+        return super().eventFilter(obj, event)
+
+    def _selected_or_copy_text(self) -> str:
+        try:
+            if self.label.hasSelectedText():
+                return self.label.selectedText().replace("\u2029", "\n")
+        except AttributeError:
+            pass
+        return self._copy_text
 
     def set_regenerable(self, enabled: bool):
         self._can_regenerate = bool(enabled)

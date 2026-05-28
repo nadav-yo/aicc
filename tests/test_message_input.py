@@ -3,8 +3,14 @@ from pathlib import Path
 from PyQt6.QtCore import QEvent, QPointF, QMimeData, QUrl, Qt
 from PyQt6.QtGui import QDropEvent, QImage, QKeyEvent, QTextCursor
 
+from services.file_ref_clipboard import AICHS_MESSAGE_COPY_MIME, file_refs_payload
 from services.terminal_refs import TERMINAL_REF_MIME
-from ui.widgets.message_input import ComposerWidget, _images_from_mime, _slash_has_args
+from ui.widgets.message_input import (
+    ComposerWidget,
+    _images_from_mime,
+    _slash_has_args,
+    _with_visible_file_mentions,
+)
 
 
 def _drop_event(mime: QMimeData) -> QDropEvent:
@@ -77,6 +83,32 @@ def test_paste_terminal_ref_prefers_hidden_reference(qapp):
     composer.input.insertFromMimeData(mime)
 
     assert composer.input.toPlainText() == "!term[27:27]"
+
+
+def test_paste_aichs_message_adds_visible_file_mention_and_records_refs(qapp):
+    composer = ComposerWidget()
+    mime = QMimeData()
+    text = "services\\git_diff.py: 77%"
+    mime.setText(text)
+    mime.setData(AICHS_MESSAGE_COPY_MIME, file_refs_payload(text))
+
+    composer.input.insertFromMimeData(mime)
+
+    assert composer.input.toPlainText() == "@services\\git_diff.py: 77%"
+    assert composer.take_pasted_file_refs() == ["services\\git_diff.py"]
+    assert composer.take_pasted_file_refs() == []
+
+
+def test_visible_file_mentions_do_not_absorb_punctuation():
+    text = "I read services\\git_diff.py."
+
+    enriched = _with_visible_file_mentions(text, ["services\\git_diff.py"])
+
+    assert enriched == "I read @services\\git_diff.py."
+
+
+def test_visible_file_mentions_leave_external_text_without_refs_unchanged():
+    assert _with_visible_file_mentions("I read services\\git_diff.py.", []) == "I read services\\git_diff.py."
 
 
 def test_slash_has_args():

@@ -10,6 +10,7 @@ from PyQt6.QtGui import (
 
 from config import MAX_INLINE_IMAGE_DIMENSION
 from services.content import encode_image
+from services.file_ref_clipboard import AICHS_MESSAGE_COPY_MIME, parse_file_refs_payload
 from services.terminal_refs import TERMINAL_REF_MIME
 from ui.theme import (
     composer_reference_colors, composer_shell_style, composer_style,
@@ -17,7 +18,7 @@ from ui.theme import (
 )
 
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
-_REFERENCE_RE = re.compile(r'(?<!\S)@(?:"[^"]+"|[^\s@]+)')
+_REFERENCE_RE = re.compile(r'(?<!\S)@(?:"[^"]+"|[^\s@]*[^\s@.,:;!?)\]}])')
 
 
 class _ReferenceHighlighter(QSyntaxHighlighter):
@@ -92,6 +93,7 @@ class MessageInput(QTextEdit):
         self._in_mention_mode = False
         self._mention_start = -1
         self._enter_to_send = False
+        self._pasted_file_refs: list[str] = []
         self.setAcceptDrops(True)
         self._reference_highlighter = _ReferenceHighlighter(self.document())
         self._apply_style()
@@ -156,6 +158,14 @@ class MessageInput(QTextEdit):
     def exit_mention_mode(self):
         self._in_mention_mode = False
         self._mention_start = -1
+
+    def take_pasted_file_refs(self) -> list[str]:
+        refs = list(self._pasted_file_refs)
+        self._pasted_file_refs.clear()
+        return refs
+
+    def clear_pasted_file_refs(self):
+        self._pasted_file_refs.clear()
 
     def insert_file_mention(self, rel_path: str):
         token = f'@"{rel_path}"' if any(ch.isspace() for ch in rel_path) else f"@{rel_path}"
@@ -305,6 +315,14 @@ class MessageInput(QTextEdit):
             ref = bytes(source.data(TERMINAL_REF_MIME)).decode("utf-8", errors="replace").strip()
             if ref:
                 self.textCursor().insertText(ref)
+                return
+        if source.hasFormat(AICHS_MESSAGE_COPY_MIME):
+            refs = parse_file_refs_payload(source.data(AICHS_MESSAGE_COPY_MIME))
+            for ref in refs:
+                if ref not in self._pasted_file_refs:
+                    self._pasted_file_refs.append(ref)
+            if refs and source.hasText():
+                self.textCursor().insertText(_with_visible_file_mentions(source.text(), refs))
                 return
         if source.hasImage():
             image = source.imageData()
@@ -485,6 +503,7 @@ class ComposerWidget(QWidget):
 
     def clear(self):
         self.input.clear()
+        self.input.clear_pasted_file_refs()
         self.strip.clear()
 
     def set_enabled(self, enabled: bool):
@@ -519,6 +538,9 @@ class ComposerWidget(QWidget):
 
     def active_skill(self):
         return self._active_skill
+
+    def take_pasted_file_refs(self) -> list[str]:
+        return self.input.take_pasted_file_refs()
 
     def apply_appearance(self):
         self._shell.setStyleSheet(composer_shell_style())
@@ -557,3 +579,12 @@ def _slash_has_args(text: str) -> bool:
         return False
     parts = stripped[1:].split(maxsplit=1)
     return len(parts) > 1 and bool(parts[1].strip())
+
+
+def _with_visible_file_mentions(text: str, refs: list[str]) -> str:
+    enriched = str(text or "")
+    for ref in sorted((r for r in refs if r), key=len, reverse=True):
+        mention = f'@"{ref}"' if any(ch.isspace() for ch in ref) else f"@{ref}"
+        pattern = re.compile(rf"(?<!@)(?<![\w/\\-]){re.escape(ref)}(?![\w/\\-])")
+        enriched = pattern.sub(lambda _match, value=mention: value, enriched)
+    return enriched

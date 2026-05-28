@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from ui.widgets.chat_panel import ChatPanel, _history_ends_with_assistant_text
+from ui.widgets.chat_panel import ChatPanel, _history_ends_with_assistant_text, _message_files
 
 
 class _Button:
@@ -128,3 +128,27 @@ def test_history_ends_with_assistant_text():
     assert _history_ends_with_assistant_text(history, "done")
     assert not _history_ends_with_assistant_text(history, "other")
     assert not _history_ends_with_assistant_text([{"role": "user", "content": "done"}], "done")
+
+
+def test_message_files_includes_hidden_clipboard_refs(workspace):
+    target = workspace / "services" / "git_diff.py"
+    target.parent.mkdir()
+    target.write_text("content", encoding="utf-8")
+
+    files = _message_files(str(workspace), "coverage says services\\git_diff.py: 77%", ["services\\git_diff.py"])
+
+    assert len(files) == 1
+    assert files[0]["path"] == "services\\git_diff.py"
+    assert files[0]["content"] == "content"
+
+
+def test_message_files_keeps_sentence_punctuation_outside_bare_refs(workspace):
+    target = workspace / "services" / "chat.py"
+    target.parent.mkdir()
+    target.write_text("content", encoding="utf-8")
+
+    files = _message_files(str(workspace), "I read @services\\chat.py.")
+
+    assert len(files) == 1
+    assert files[0]["path"] == "services\\chat.py"
+    assert files[0]["content"] == "content"
