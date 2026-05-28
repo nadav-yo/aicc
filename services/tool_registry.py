@@ -22,9 +22,14 @@ class ToolContext:
     cwd: str
     on_line: Callable[[str], None] | None = None
     cancel: object | None = None
+    extension_id: str = "builtin"
 
     def is_cancelled(self) -> bool:
         return bool(self.cancel and getattr(self.cancel, "is_set", lambda: False)())
+
+    @property
+    def storage(self) -> "ExtensionStorage":
+        return ExtensionStorage(self.cwd, self.extension_id)
 
 
 @dataclass(frozen=True)
@@ -36,6 +41,7 @@ class ToolDefinition:
     parallel_safe: bool = False
     approval: str | None = None
     source: str = "builtin"
+    extension_id: str = "builtin"
 
 
 @dataclass(frozen=True)
@@ -101,6 +107,8 @@ class RuntimeCommandApi:
     enqueue_message: Callable[[str], None] | None = None
     compact_now: Callable[[bool], None] | None = None
     compact_and_resume: Callable[[str, bool], None] | None = None
+    processes: object | None = None
+    process_factory: Callable[[str], object] | None = None
 
     def notice(self, text: str) -> None:
         if self.show_notice:
@@ -121,6 +129,20 @@ class RuntimeCommandApi:
     def continue_after_compact(self, resume_prompt: str = "", *, force: bool = True) -> None:
         if self.compact_and_resume:
             self.compact_and_resume(resume_prompt, force)
+
+    def bind_extension(self, extension_id: str) -> "RuntimeCommandApi":
+        processes = self.processes
+        if self.process_factory:
+            processes = self.process_factory(extension_id)
+        return RuntimeCommandApi(
+            show_notice=self.show_notice,
+            send_message=self.send_message,
+            enqueue_message=self.enqueue_message,
+            compact_now=self.compact_now,
+            compact_and_resume=self.compact_and_resume,
+            processes=processes,
+            process_factory=self.process_factory,
+        )
 
 
 @dataclass
@@ -181,6 +203,12 @@ class ExtensionContext:
     cwd: str
     model: str = ""
     history: list[dict] = field(default_factory=list)
+    processes: object | None = None
+    extension_id: str = "extension"
+
+    @property
+    def storage(self) -> ExtensionStorage:
+        return ExtensionStorage(self.cwd, self.extension_id)
 
 
 @dataclass
@@ -195,6 +223,7 @@ class HookContext:
     output: str = ""
     status: Literal["ok", "error", "cancelled"] = "ok"
     error: str = ""
+    process: dict = field(default_factory=dict)
     directives: list[RuntimeDirective] = field(default_factory=list)
 
     def directive(self, action: str, **params) -> RuntimeDirective:
@@ -232,7 +261,7 @@ class ToolRegistry:
     def __init__(self):
         self._tools: dict[str, ToolDefinition] = {}
         self._commands: dict[str, ExtensionCommand] = {}
-        self._context_providers: list[tuple[str, ContextProvider]] = []
+        self._context_providers: list[tuple[str, ContextProvider, str]] = []
         self._hooks: dict[str, list[HookHandler]] = {}
         self._badges: dict[str, StatusBadge] = {}
         self._panels: dict[str, ExtensionPanel] = {}
@@ -266,6 +295,7 @@ class ToolRegistry:
             parallel_safe=parallel_safe,
             approval=approval,
             source=source,
+            extension_id="builtin" if source == "builtin" else self._current_extension_id,
         )
 
     def command(
@@ -297,7 +327,7 @@ class ToolRegistry:
     def context(self, name: str, provider: ContextProvider) -> None:
         if not name:
             raise ValueError("context name is required")
-        self._context_providers.append((name, provider))
+        self._context_providers.append((name, provider, self._current_extension_id))
 
     def hook(self, event: str, handler: HookHandler) -> None:
         if not event:
@@ -353,9 +383,16 @@ class ToolRegistry:
 
     def context_snippets(self, ctx: ExtensionContext) -> list[tuple[str, str]]:
         snippets: list[tuple[str, str]] = []
-        for name, provider in self._context_providers:
+        for name, provider, extension_id in self._context_providers:
+            scoped_ctx = ExtensionContext(
+                cwd=ctx.cwd,
+                model=ctx.model,
+                history=ctx.history,
+                processes=ctx.processes,
+                extension_id=extension_id,
+            )
             try:
-                text = provider(ctx)
+                text = provider(scoped_ctx)
             except Exception:
                 self.errors.append(f"context {name}:\n{traceback.format_exc().rstrip()}")
                 continue
@@ -424,6 +461,7 @@ def run_extension_command(
         return None, [f"command not found: {name}"]
     if command.execute is None:
         return None, [f"command is prompt-only: {name}"]
+    runtime_api = (runtime or RuntimeCommandApi()).bind_extension(command.extension_id)
     ctx = CommandContext(
         cwd=cwd,
         model=model,
@@ -431,7 +469,7 @@ def run_extension_command(
         conversation_id=conversation_id,
         command=name,
         extension_id=command.extension_id,
-        runtime=runtime or RuntimeCommandApi(),
+        runtime=runtime_api,
     )
     try:
         return command.execute(ctx, args), list(registry.errors)
@@ -448,7 +486,7 @@ def extension_context_snippets(
 ) -> tuple[list[tuple[str, str]], list[str]]:
     registry = ToolRegistry()
     load_extensions(registry, cwd)
-    ctx = ExtensionContext(cwd=cwd, model=model, history=history or [])
+    ctx = ExtensionContext(cwd=cwd, model=model, history=history or [], processes=_process_api(cwd))
     return registry.context_snippets(ctx), list(registry.errors)
 
 
@@ -492,7 +530,7 @@ def extension_status_badges(
 ) -> tuple[list[tuple[StatusBadge, object]], list[str]]:
     registry = ToolRegistry()
     load_extensions(registry, cwd)
-    ctx = ExtensionContext(cwd=cwd, model=model, history=history or [])
+    ctx = ExtensionContext(cwd=cwd, model=model, history=history or [], processes=_process_api(cwd))
     return registry.status_badges(ctx), list(registry.errors)
 
 
@@ -514,7 +552,7 @@ def extension_panel_data(
     panel = registry.panel_by_name(name)
     if panel is None:
         return name, {"title": name, "body": "Panel not found."}, list(registry.errors)
-    ctx = ExtensionContext(cwd=cwd, model=model, history=history or [])
+    ctx = ExtensionContext(cwd=cwd, model=model, history=history or [], processes=_process_api(cwd))
     try:
         data = panel.provider(ctx)
     except Exception:
@@ -588,7 +626,7 @@ def _extension_file_summary(path: Path, cwd: str | None = None) -> ExtensionFile
         status="Failed" if errors else "Loaded",
         tools=[tool for tool in registry.all() if tool.source != "builtin"],
         commands=registry.commands(),
-        contexts=[name for name, _provider in registry._context_providers],
+        contexts=[name for name, _provider, _extension_id in registry._context_providers],
         hooks=sorted(registry._hooks.keys()),
         badges=list(registry._badges.values()),
         panels=registry.panels(),
@@ -695,6 +733,15 @@ def _collect_directives(ctx: HookContext, result) -> None:
     if isinstance(result, (list, tuple)):
         for item in result:
             _collect_directives(ctx, item)
+
+
+def _process_api(cwd: str) -> object:
+    try:
+        from services.processes import RuntimeProcessApi, get_process_manager
+
+        return RuntimeProcessApi(get_process_manager(), workspace=cwd)
+    except Exception:
+        return None
 
 
 def _safe_extension_id(value: str) -> str:

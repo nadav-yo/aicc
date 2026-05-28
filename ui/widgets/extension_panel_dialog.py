@@ -192,6 +192,8 @@ class ExtensionPanelDialog(QDialog):
             return
         if self._on_action:
             self._on_action(action)
+        if action.get("refresh"):
+            self._refresh()
 
     def _refresh(self):
         if self._on_refresh:
@@ -262,7 +264,13 @@ def _warn_unknown_keys(
 
 
 def _is_supported_action(action: dict) -> bool:
-    return action.get("type") in {"open_file", "copy", "refresh_panel", "send_message"}
+    return action.get("type") in {
+        "open_file",
+        "copy",
+        "refresh_panel",
+        "send_message",
+        "run_extension_command",
+    }
 
 
 def _delete_layout(layout):

@@ -117,9 +117,11 @@ Read/search paths must stay inside the workspace (resolved paths, symlinks follo
 `execute` (host shell): Run / Don't ask again (this conversation only) / Cancel; first prompt explains full user access.
 Confirmations are not a sandbox — documented in dialogs and tool descriptions.
 
-## [ ] Undo file changes
-Track every `edit_file` call during a session. "Undo last change" button in the
-git panel (or Cmd+Z) restores the previous file content from an in-memory snapshot.
+## [ ] Extension-backed change timeline
+Expose enough extension events and runtime APIs for an extension to track
+`edit_file` calls, shell commands, before/after snapshots, and undo actions.
+The default extension can show a session timeline with "Undo last change" in
+the git panel or an extension panel.
 
 ---
 
@@ -164,6 +166,12 @@ Cmd+K opens a fuzzy-search palette over recent conversations, slash-commands
 While the agent is in its tool-use loop, show a collapsible panel listing
 each step: ✓ read_file, ✓ execute, ⟳ edit_file… Gives a live map of what
 the agent is doing, like Claude Code's task list.
+
+## [ ] Project run recipes
+Let a workspace define named commands such as `test`, `lint`, `typecheck`,
+`build`, and `smoke` in project config or extensions. Expose them in the
+command palette and make their latest status available to the agent and UI
+panels without requiring the user to remember exact shell commands.
 
 ## [x] Parallel tool execution
 When the model returns multiple tool_use blocks in one turn, execute them

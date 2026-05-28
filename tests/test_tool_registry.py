@@ -31,6 +31,7 @@ def test_load_extension_tool_and_context(workspace_with_tool):
     tool = registry.get("ping")
     assert tool is not None
     assert tool.source == "extension"
+    assert tool.extension_id == "tooling"
     assert tool.parallel_safe is True
 
     ctx = ExtensionContext(cwd=cwd)
@@ -46,6 +47,54 @@ def test_tool_context_cancel_check():
 
     assert ToolContext(cwd=".", cancel=Cancel()).is_cancelled() is True
     assert ToolContext(cwd=".").is_cancelled() is False
+
+
+def test_extension_tool_context_exposes_extension_storage(workspace):
+    write_extension(
+        workspace,
+        "memory_tool.py",
+        """
+        def register(registry):
+            registry.tool(
+                name="save_memory_probe",
+                description="Save a storage probe.",
+                input_schema={"type": "object", "properties": {}},
+                execute=save,
+            )
+
+        def save(ctx, inputs):
+            ctx.storage.save_state({"ok": True})
+            return ctx.extension_id
+        """,
+    )
+
+    from services.tools import execute
+
+    result = execute("save_memory_probe", {}, str(workspace))
+
+    assert result == "memory_tool"
+    state_path = workspace / ".aichs" / "state" / "memory_tool" / "state.json"
+    assert '"ok": true' in state_path.read_text(encoding="utf-8")
+
+
+def test_extension_context_exposes_extension_storage(workspace):
+    write_extension(
+        workspace,
+        "ctx_store.py",
+        """
+        def register(registry):
+            registry.context("Stored note", stored_note)
+
+        def stored_note(ctx):
+            return ctx.storage.load_config().get("note", "missing")
+        """,
+    )
+    ExtensionStorage(str(workspace), "ctx_store").save_config({"note": "stored"})
+
+    snippets, errors = extension_context_snippets(str(workspace))
+
+    assert errors == []
+    assert ("Stored note", "stored") in snippets
 
 
 def test_registry_validation_errors():
@@ -97,6 +146,14 @@ def test_runtime_command_api_callbacks():
         ("compact", False),
         ("continue", "r", True),
     ]
+
+
+def test_runtime_command_api_binds_process_factory():
+    api = RuntimeCommandApi(process_factory=lambda extension_id: f"proc:{extension_id}")
+
+    bound = api.bind_extension("demo_ext")
+
+    assert bound.processes == "proc:demo_ext"
 
 
 def test_extension_storage_config_and_state(workspace):

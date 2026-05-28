@@ -74,6 +74,11 @@ def hello(ctx, inputs):
 | `ctx.on_line` | Optional callback for streaming command-like output |
 | `ctx.cancel` | Cancellation event |
 | `ctx.is_cancelled()` | Convenience cancellation check |
+| `ctx.extension_id` | Safe id derived from the extension filename |
+| `ctx.storage.load_config(scope)` | Load project/global extension JSON config |
+| `ctx.storage.save_config(data, scope)` | Save project/global extension JSON config |
+| `ctx.storage.load_state(name)` | Load project-scoped extension JSON state |
+| `ctx.storage.save_state(data, name)` | Save project-scoped extension JSON state |
 | `inputs` | The model-provided JSON arguments |
 
 `approval="once"` asks the user before the tool is first used in a conversation.
@@ -144,9 +149,19 @@ Executable command context:
 | `ctx.runtime.enqueue(text)` | Queue a normal chat message |
 | `ctx.runtime.compact(force=True)` | Request normal compaction |
 | `ctx.runtime.continue_after_compact(prompt, force=True)` | Queue a synthetic resume after compaction |
+| `ctx.runtime.processes.start(name, command, ...)` | Start a managed long-running process |
+| `ctx.runtime.processes.status(name)` | Inspect managed process state |
+| `ctx.runtime.processes.tail(name, lines)` | Read recent process output |
+| `ctx.runtime.processes.write(name, text)` | Write to process stdin when enabled |
+| `ctx.runtime.processes.stop(name)` | Stop a managed process |
 
 `capabilities` are shown in the Extensions view so runtime-control extensions
 are visibly more powerful than prompt or UI-only extensions.
+
+Managed process starts show a long-running process approval dialog when invoked
+through the app runtime. Core owns the process handle, keeps a bounded output
+buffer, stops workspace processes on app close, and emits `process_started` and
+`process_exited` hooks with `ctx.process`.
 
 ## Context Snippets
 
@@ -158,8 +173,14 @@ def register(registry):
 
 
 def project_workflow(ctx):
-    return "Run `pytest` before claiming Python changes are verified."
+    state = ctx.storage.load_state("workflow")
+    note = state.get("note") or "Run `pytest` before claiming Python changes are verified."
+    return note
 ```
+
+Context providers receive `ctx.cwd`, `ctx.model`, `ctx.history`,
+`ctx.extension_id`, and the same `ctx.storage` helper available to extension
+tools.
 
 ## Hooks
 
@@ -398,9 +419,12 @@ Action schema:
 | Field | Type | Description |
 |---|---|---|
 | `label` | string | Button text. Defaults to the action type. |
-| `type` | string | Supported: `open_file`, `copy`, `refresh_panel`, `send_message`. |
+| `type` | string | Supported: `open_file`, `copy`, `refresh_panel`, `send_message`, `run_extension_command`. |
 | `path` | string | For `open_file`: workspace-relative path. |
 | `text` | string | For `copy`: text to copy. For `send_message`: message text to send or queue. |
+| `command` | string | For `run_extension_command`: executable extension command name. |
+| `args` | string | For `run_extension_command`: arguments passed to the command. |
+| `refresh` | boolean | If true, refresh the panel after the action runs. |
 
 Supported actions:
 
@@ -410,6 +434,7 @@ Supported actions:
 | `copy` | Copies `text` to the clipboard. |
 | `refresh_panel` | Re-runs the panel provider and redraws the panel. |
 | `send_message` | Sends or queues `text` as a normal chat message. |
+| `run_extension_command` | Runs an executable extension command without adding a chat message. |
 
 String shortcuts:
 

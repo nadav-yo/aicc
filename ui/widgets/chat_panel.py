@@ -34,7 +34,7 @@ from services.crew import (
 )
 from services.crew_context import crew_context_window
 from services.tool_policy import ConversationToolPolicy, ToolApprovalBus
-from ui.widgets.tool_approval_dialog import handle_pending_approval
+from ui.widgets.tool_approval_dialog import confirm_process_start, handle_pending_approval
 from services.compaction import CompactionThread, should_compact, can_compact, _estimate_tokens
 from services.content import (
     build_user_content,
@@ -47,6 +47,7 @@ from services.context_budget import analyze_context
 from services.model_registry import api_key_env_var, get_provider_config, load_user_providers
 from services.workspace import build_system
 from services.export import export_conversation_dialog
+from services.processes import RuntimeProcessApi, get_process_manager
 from services.tool_registry import (
     RuntimeCommandApi,
     extension_errors,
@@ -630,6 +631,9 @@ class ChatPanel(QWidget):
         if self._visible_run():
             self._stop_streaming()
 
+    def stop_managed_processes(self):
+        get_process_manager().stop_workspace(self.cwd)
+
     def attach_file(self, path: str):
         try:
             rel = Path(path).resolve().relative_to(Path(self.cwd).resolve()).as_posix()
@@ -712,6 +716,13 @@ class ChatPanel(QWidget):
                 self._update_queue_ui()
             else:
                 self._send_draft(draft)
+        elif action_type == "run_extension_command":
+            name = str(action.get("command") or action.get("name") or "").strip()
+            args = str(action.get("args") or "")
+            if not name:
+                self._add_notice("Extension action has no command to run.")
+                return
+            self._run_extension_command(name, args)
         else:
             self._add_notice(f"Unsupported extension action: {action_type or 'unknown'}")
 
@@ -1378,6 +1389,12 @@ class ChatPanel(QWidget):
             enqueue_message=lambda text: self._send_or_queue_text(text, prefer_queue=True),
             compact_now=lambda force: self.compact_conversation(force=force),
             compact_and_resume=self._compact_and_resume_from_command,
+            process_factory=lambda extension_id: RuntimeProcessApi(
+                get_process_manager(),
+                workspace=self.cwd,
+                extension_id=extension_id,
+                approve_start=lambda request: confirm_process_start(self.window(), request),
+            ),
         )
 
     def _send_or_queue_text(self, text: str, *, prefer_queue: bool, synthetic: str = ""):

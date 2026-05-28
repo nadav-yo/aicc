@@ -1,74 +1,63 @@
-# Compaction and Archiving
+# Compaction and Decision Memory
 
-Compaction and archiving share the same trigger point, but they serve different
-jobs.
+Compaction is only context management. When a conversation grows past the
+context budget, compaction cuts off an older prefix of the chat, asks the model
+for a concise continuation summary, and keeps that summary plus recent verbatim
+messages.
 
-When a conversation grows past the context budget, compaction cuts off an older
-prefix of the chat, asks the model for a concise continuation summary, and keeps
-that summary plus the recent verbatim messages. The summary is optimized for the
-next model call: current goal, important constraints, relevant files, decisions,
-tool results, blockers, and the next step.
+The compacted summary is optimized for the next model call: current goal,
+important constraints, relevant files, decisions, tool results, blockers, and
+the next step. It is not a durable archive.
 
-That same cut point is also the last moment when the app still has the full
-pre-compact transcript in memory. Before replacing the older messages, the app
-should extract archive candidates for the Archivist. These candidates are not
-the compacted chat history; they are structured memory items the archiver can
-deduplicate, merge, or ignore later.
+## Raw History
 
-## Recommended Split
+Compaction replaces the saved conversation messages with the compacted history.
+The old raw prefix is not kept in the active conversation JSON.
 
-Compaction should produce:
+Do not automatically save raw compaction archives by default. That would make
+compaction a hidden retention mechanism instead of a straightforward context
+cleanup operation.
 
-- a short continuation summary for the active conversation
-- archive candidates derived from the messages being removed
+## Decision Memory
 
-The compaction path should not block on archival work. If candidate extraction
-or archival storage fails, the conversation should still compact successfully
-and continue. Archival can run asynchronously or be retried later.
+Durable project decisions should live outside core compaction as an opt-in
+extension.
 
-## Archive Candidates
+The decision-memory extension exposes narrow tools:
 
-Good archive candidates are durable and useful across future chats:
+- `remember_decision(topic, decision)` saves one short durable decision
+- `recall_decisions(topic)` returns decisions for one topic
+- `list_decision_topics()` lists known decision keys
 
-- user preferences and standing instructions
-- project facts that are not obvious from a quick repo search
-- decisions made, including rejected approaches and reasons
-- completed changes and the files or symbols involved
-- unresolved TODOs, blockers, and follow-up questions
-- useful debugging findings or test results
-- important links between a task, a conversation, and a workspace path
-
-Avoid archiving:
-
-- raw tool output
-- transient chatter
-- duplicate summaries
-- large pasted code or file contents
-- facts that can be rediscovered cheaply from the repo
-
-## Suggested Shape
-
-Archive candidates should carry enough provenance to be audited later:
+Storage is intentionally tiny:
 
 ```json
 {
-  "conversation_id": "20260527_101500",
-  "cwd": "C:/Users/nadav/source/repos/aichs",
-  "message_range": [0, 18],
-  "created_at": "2026-05-27T10:42:00",
-  "kind": "decision",
-  "tags": ["compaction", "archivist", "memory"],
-  "text": "Compaction should emit archive candidates, but archiving should run separately and must not block conversation compaction."
+  "authentication": [
+    "Use JWT for API authentication."
+  ],
+  "compaction": [
+    "Decision memory should be an opt-in extension, not part of core compaction."
+  ]
 }
 ```
 
-The exact schema can evolve, but the boundary should stay stable: compaction
-identifies what is worth carrying forward, while the Archivist owns long-term
-storage policy.
+The extension may add a small context snippet to the main prompt:
 
-## Why Not Only Search Saved Chats?
+- recall decisions before revisiting a durable architecture, product, strategy,
+  or implementation topic
+- remember only strong user-confirmed decisions
+- avoid transient plans, tool output, summaries, guesses, secrets, and facts
+  easily rediscovered from the repo
+- optionally show known topic keys, but do not inject all decision contents into
+  every prompt
 
-Saved conversation JSON remains searchable, but after compaction the original
-prefix is no longer present in the active conversation history. The continuation
-summary is intentionally lossy. Extracting archive candidates during compaction
-preserves durable memory while keeping the active model context small.
+## Why Extension-Only
+
+Keeping decision memory as an extension makes the behavior explicit,
+workspace-disableable, and easy to inspect. It also avoids coupling memory
+policy to compaction, cron jobs, or raw transcript retention.
+
+Core infrastructure should only provide the extension API needed for this:
+extension tools and context providers receive `ctx.extension_id` and
+`ctx.storage`, so they can share project-scoped state without hand-rolled paths.

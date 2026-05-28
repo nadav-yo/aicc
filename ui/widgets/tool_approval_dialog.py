@@ -6,6 +6,7 @@ from PyQt6.QtGui import QFont
 
 from services.tool_policy import PendingApproval, repo_root
 from services.shell_tool import is_shell_tool
+from services.processes import ProcessStartRequest
 
 
 def handle_pending_approval(parent, bus, pending: PendingApproval) -> None:
@@ -15,6 +16,51 @@ def handle_pending_approval(parent, bus, pending: PendingApproval) -> None:
         _show_shell_command(parent, bus, pending)
     elif pending.kind == "tool":
         _show_extension_tool(parent, bus, pending)
+
+
+def confirm_process_start(parent, request: ProcessStartRequest) -> bool:
+    dlg = QDialog(parent)
+    dlg.setWindowTitle("Start long-running process?")
+    layout = QVBoxLayout(dlg)
+
+    note = QLabel(
+        "This extension wants to start a long-running process. It runs as "
+        "<b>you</b> on this machine and may keep running after the command returns."
+    )
+    note.setWordWrap(True)
+    note.setStyleSheet("color: #aaa;")
+    layout.addWidget(note)
+
+    details = QLabel(
+        f"Name: <b>{request.name}</b><br>"
+        f"Extension: <code>{request.extension_id or 'extension'}</code><br>"
+        f"Workspace: <code>{request.workspace}</code><br>"
+        f"Cwd: <code>{request.cwd}</code><br>"
+        f"Stdin: {'enabled' if request.allow_stdin else 'disabled'}"
+    )
+    details.setWordWrap(True)
+    layout.addWidget(details)
+
+    cmd_box = QTextEdit()
+    command = request.command
+    if isinstance(command, list):
+        command = " ".join(command)
+    cmd_box.setPlainText(str(command))
+    cmd_box.setReadOnly(True)
+    cmd_box.setMaximumHeight(120)
+    cmd_font = QFont("Consolas")
+    if not cmd_font.exactMatch():
+        cmd_font = QFont("Courier New")
+    cmd_box.setFont(cmd_font)
+    layout.addWidget(cmd_box)
+
+    buttons = QDialogButtonBox()
+    start = buttons.addButton("Start", QDialogButtonBox.ButtonRole.AcceptRole)
+    cancel = buttons.addButton("Cancel", QDialogButtonBox.ButtonRole.RejectRole)
+    start.clicked.connect(dlg.accept)
+    cancel.clicked.connect(dlg.reject)
+    layout.addWidget(buttons)
+    return dlg.exec() == QDialog.DialogCode.Accepted
 
 
 def _show_edit(parent, bus, pending: PendingApproval) -> None:

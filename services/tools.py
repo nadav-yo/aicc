@@ -134,7 +134,12 @@ def execute(name: str, inputs: dict, cwd: str, on_line=None, cancel=None) -> str
         if path_err:
             return f"[tool error] {path_err}"
 
-        ctx = ToolContext(cwd=cwd, on_line=on_line, cancel=cancel)
+        ctx = ToolContext(
+            cwd=cwd,
+            on_line=on_line,
+            cancel=cancel,
+            extension_id=tool.extension_id,
+        )
         return tool.execute(ctx, inputs)
 
     except Exception as exc:

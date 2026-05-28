@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -13,7 +12,6 @@ from PyQt6.QtWidgets import (
     QLabel,
     QPushButton,
     QScrollArea,
-    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -24,7 +22,7 @@ from services.tool_registry import (
     extension_overview,
     set_extension_enabled,
 )
-from ui.theme import palette, chat_font_pt, meta_font_pt, apply_flat_tab_style, icon_button_style
+from ui.theme import palette, chat_font_pt, meta_font_pt, icon_button_style
 
 
 class ExtensionsDialog(QDialog):
@@ -42,8 +40,10 @@ class ExtensionsDialog(QDialog):
             else overview_or_cwd
         )
         self._on_reload = on_reload
+        self._selected_path = ""
+        self._detail_mode = "placeholder"
         self.setWindowTitle("Extensions")
-        self.resize(720, 620)
+        self.resize(900, 620)
 
         p = palette()
         self.setStyleSheet(
@@ -66,6 +66,12 @@ class ExtensionsDialog(QDialog):
         title_row.addWidget(title)
         title_row.addStretch()
 
+        api_btn = QPushButton("API Reference")
+        api_btn.setToolTip("Inspect the extension API reference")
+        api_btn.setStyleSheet(_secondary_button_style())
+        api_btn.clicked.connect(self._show_api_reference)
+        title_row.addWidget(api_btn)
+
         reload_btn = QPushButton("↻")
         reload_btn.setToolTip("Reload extensions")
         reload_btn.setFixedSize(30, 30)
@@ -78,9 +84,26 @@ class ExtensionsDialog(QDialog):
         self._summary.setStyleSheet(f"color:{p['TEXT_DIM']}; font-size:{meta_font_pt()}px;")
         root.addWidget(self._summary)
 
-        self._tabs = QTabWidget()
-        apply_flat_tab_style(self._tabs, "extensionsTabs")
-        root.addWidget(self._tabs, 1)
+        content = QHBoxLayout()
+        content.setContentsMargins(0, 2, 0, 0)
+        content.setSpacing(14)
+        root.addLayout(content, 1)
+
+        self._list_scroll = QScrollArea()
+        self._list_scroll.setWidgetResizable(True)
+        self._list_scroll.setFixedWidth(330)
+        self._list_scroll.setStyleSheet(_list_scroll_style())
+        self._list_body = QWidget()
+        self._list_layout = QVBoxLayout(self._list_body)
+        self._list_layout.setContentsMargins(0, 0, 0, 0)
+        self._list_layout.setSpacing(1)
+        self._list_scroll.setWidget(self._list_body)
+        content.addWidget(self._list_scroll)
+
+        self._detail_scroll = QScrollArea()
+        self._detail_scroll.setWidgetResizable(True)
+        self._detail_scroll.setStyleSheet(_detail_scroll_style())
+        content.addWidget(self._detail_scroll, 1)
 
         self._render()
 
@@ -98,58 +121,92 @@ class ExtensionsDialog(QDialog):
     def _render(self):
         overview = self._overview
         self._summary.setText(_summary_text(overview))
-        while self._tabs.count():
-            self._tabs.removeTab(0)
+        _clear_layout(self._list_layout)
         if overview.files:
+            selected = _find_file(overview, self._selected_path) if self._selected_path else None
+            if self._selected_path and selected is None:
+                self._selected_path = ""
+                if self._detail_mode != "api":
+                    self._detail_mode = "placeholder"
+            if not self._selected_path and self._detail_mode != "api":
+                selected = overview.files[0]
+                self._selected_path = selected.path
+                self._detail_mode = "detail"
             for file in overview.files:
-                index = self._tabs.addTab(
-                    _ExtensionFileTab(file, on_toggle=self._set_enabled),
-                    _tab_title(file),
+                row = _ExtensionListRow(
+                    file,
+                    selected=file.path == self._selected_path,
+                    on_toggle=self._set_enabled,
+                    on_select=self._show_file_detail,
                 )
-                _apply_tab_status(self._tabs, index, file)
+                self._list_layout.addWidget(row)
+            if self._detail_mode == "api":
+                self._detail_scroll.setWidget(_ApiReferencePane())
+            elif selected:
+                self._detail_scroll.setWidget(_ExtensionDetailPane(selected, on_toggle=self._set_enabled))
+            else:
+                self._show_placeholder()
         else:
-            self._tabs.addTab(_EmptyTab(), "No extensions")
-        self._tabs.addTab(_ApiReferenceTab(), "API Reference")
+            self._list_layout.addWidget(_EmptyList())
+            self._show_placeholder()
+        self._list_layout.addStretch()
+
+    def _show_file_detail(
+        self,
+        file: ExtensionFileSummary,
+        *,
+        rerender_list: bool = True,
+    ) -> None:
+        self._selected_path = file.path
+        self._detail_mode = "detail"
+        self._detail_scroll.setWidget(_ExtensionDetailPane(file, on_toggle=self._set_enabled))
+        if rerender_list:
+            self._render()
+
+    def _show_api_reference(self) -> None:
+        self._selected_path = ""
+        self._detail_mode = "api"
+        self._render()
+
+    def _show_placeholder(self) -> None:
+        self._detail_mode = "placeholder"
+        self._detail_scroll.setWidget(_PlaceholderPane())
 
 
-class _ExtensionFileTab(QWidget):
-    def __init__(self, file: ExtensionFileSummary, parent=None, on_toggle=None):
+class _ExtensionListRow(QFrame):
+    def __init__(
+        self,
+        file: ExtensionFileSummary,
+        *,
+        selected: bool,
+        parent=None,
+        on_toggle=None,
+        on_select=None,
+    ):
         super().__init__(parent)
-        self._on_toggle = on_toggle
-        root = QVBoxLayout(self)
-        root.setContentsMargins(0, 10, 0, 0)
-        root.setSpacing(0)
+        self._file = file
+        self._on_select = on_select
+        self.setObjectName("extensionListRow")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setStyleSheet(_list_row_style(selected, _status_tone(file)))
+        layout = QGridLayout(self)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setHorizontalSpacing(8)
+        layout.setVerticalSpacing(3)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        body = QWidget()
-        self._layout = QVBoxLayout(body)
-        self._layout.setContentsMargins(0, 0, 0, 0)
-        self._layout.setSpacing(10)
-        scroll.setWidget(body)
-        root.addWidget(scroll, 1)
+        name = QLabel(_extension_name(file))
+        name.setWordWrap(True)
+        name.setStyleSheet(_list_name_style())
+        layout.addWidget(name, 0, 0)
 
-        self._render(file)
-        self._layout.addStretch()
+        status = QLabel(_list_status_text(file))
+        status.setStyleSheet(_list_meta_style(_status_tone(file)))
+        layout.addWidget(status, 0, 1, Qt.AlignmentFlag.AlignRight)
 
-    def _render(self, file: ExtensionFileSummary) -> None:
-        self._add_status(file)
-        self._add_description(file)
-        self._add_tools(file)
-        self._add_commands(file)
-        self._add_context(file)
-        self._add_hooks(file)
-        self._add_ui(file)
-        if file.errors:
-            self._add_section("Errors", [(error, "") for error in file.errors], tone="danger")
-
-    def _add_status(self, file: ExtensionFileSummary) -> None:
-        row = QHBoxLayout()
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(8)
-        status = QLabel(file.status)
-        status.setStyleSheet(_status_label_style(_status_tone(file)))
-        row.addWidget(status)
+        meta = QLabel(_list_subtitle(file))
+        meta.setWordWrap(True)
+        meta.setStyleSheet(_list_path_style())
+        layout.addWidget(meta, 1, 0, 1, 2)
 
         enabled = file.status != "Disabled"
         checkbox = QCheckBox("Enabled")
@@ -160,13 +217,118 @@ class _ExtensionFileTab(QWidget):
         checkbox.setStyleSheet(_enabled_checkbox_style())
         checkbox.toggled.connect(
             lambda checked, path=file.path:
+                on_toggle and on_toggle(path, bool(checked))
+        )
+        layout.addWidget(checkbox, 2, 0, Qt.AlignmentFlag.AlignLeft)
+
+    def mousePressEvent(self, event):
+        if self._on_select:
+            self._on_select(self._file)
+        super().mousePressEvent(event)
+
+
+class _ExtensionDetailPane(QWidget):
+    def __init__(self, file: ExtensionFileSummary, parent=None, on_toggle=None):
+        super().__init__(parent)
+        self._on_toggle = on_toggle
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(14)
+
+        self._add_header(root, file)
+        self._add_description(root, file)
+        _add_detail_section(
+            root,
+            "Tools",
+            [
+                (
+                    tool.name,
+                    _join_details(
+                        tool.description,
+                        "parallel safe" if tool.parallel_safe else "",
+                        f"approval: {tool.approval}" if tool.approval else "",
+                    ),
+                )
+                for tool in file.tools
+            ],
+        )
+        _add_detail_section(
+            root,
+            "Slash Commands",
+            [
+                (
+                    f"/{command.name}",
+                    _join_details(
+                        command.description,
+                        "executable" if command.executable else "prompt mode",
+                        f"capabilities: {', '.join(command.capabilities)}" if command.capabilities else "",
+                        f"tools: {', '.join(command.tools)}" if command.tools else "tools: all",
+                    ),
+                )
+                for command in file.commands
+            ],
+        )
+        _add_detail_section(
+            root,
+            "Context",
+            [(name, "Injected into workspace context") for name in file.contexts],
+        )
+        _add_detail_section(
+            root,
+            "Hooks",
+            [(name, "Lifecycle hook") for name in file.hooks],
+        )
+        ui_rows = [(badge.name, "Status badge") for badge in file.badges]
+        ui_rows += [(panel.name, f"Panel: {panel.title}") for panel in file.panels]
+        _add_detail_section(root, "UI Contributions", ui_rows)
+        _add_detail_section(
+            root,
+            "Errors",
+            [(error, "") for error in file.errors],
+            tone="danger",
+        )
+        root.addStretch()
+
+    def _add_header(self, root: QVBoxLayout, file: ExtensionFileSummary) -> None:
+        p = palette()
+        header = QFrame()
+        header.setObjectName("extensionHeader")
+        header.setStyleSheet(_header_style())
+        layout = QGridLayout(header)
+        layout.setContentsMargins(0, 0, 0, 12)
+        layout.setHorizontalSpacing(10)
+        layout.setVerticalSpacing(5)
+
+        title = QLabel(_extension_name(file))
+        title.setWordWrap(True)
+        title.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        title.setStyleSheet(
+            f"font-size:{chat_font_pt() + 4}px; font-weight:650; color:{p['TEXT']};"
+        )
+        layout.addWidget(title, 0, 0)
+
+        status = QLabel(file.status)
+        status.setStyleSheet(_status_label_style(_status_tone(file)))
+        layout.addWidget(status, 0, 1, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+
+        path = QLabel(file.path)
+        path.setWordWrap(True)
+        path.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        path.setStyleSheet(f"color:{p['TEXT_DIM']}; font-size:{meta_font_pt()}px;")
+        layout.addWidget(path, 1, 0, 1, 2)
+
+        enabled = file.status != "Disabled"
+        checkbox = QCheckBox("Enabled")
+        checkbox.setChecked(enabled)
+        checkbox.setStyleSheet(_enabled_checkbox_style())
+        checkbox.toggled.connect(
+            lambda checked, path=file.path:
                 self._on_toggle and self._on_toggle(path, bool(checked))
         )
-        row.addWidget(checkbox)
-        row.addStretch()
-        self._layout.addLayout(row)
+        layout.addWidget(checkbox, 2, 0, 1, 2, Qt.AlignmentFlag.AlignLeft)
+        root.addWidget(header)
 
-    def _add_description(self, file: ExtensionFileSummary) -> None:
+    def _add_description(self, root: QVBoxLayout, file: ExtensionFileSummary) -> None:
         if not file.description:
             return
         p = palette()
@@ -174,125 +336,48 @@ class _ExtensionFileTab(QWidget):
         label.setWordWrap(True)
         label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         label.setStyleSheet(
-            f"color:{p['TEXT']}; background-color:{p['BG3']};"
-            f"border:1px solid {p['BORDER']}; border-radius:8px;"
-            "padding:9px 10px;"
+            f"color:{p['TEXT']}; background:transparent;"
+            f"border-left:2px solid {p['BORDER']}; padding:0 0 0 10px;"
         )
-        self._layout.addWidget(label)
-
-    def _add_tools(self, file: ExtensionFileSummary) -> None:
-        rows = [
-            (
-                tool.name,
-                _join_details(
-                    tool.description,
-                    "parallel safe" if tool.parallel_safe else "",
-                    f"approval: {tool.approval}" if tool.approval else "",
-                ),
-            )
-            for tool in file.tools
-        ]
-        self._add_section("Tools", rows)
-
-    def _add_commands(self, file: ExtensionFileSummary) -> None:
-        rows = [
-            (
-                f"/{command.name}",
-                _join_details(
-                    command.description,
-                    "executable" if command.executable else "prompt mode",
-                    f"capabilities: {', '.join(command.capabilities)}" if command.capabilities else "",
-                    f"tools: {', '.join(command.tools)}" if command.tools else "tools: all",
-                ),
-            )
-            for command in file.commands
-        ]
-        self._add_section("Slash Commands", rows)
-
-    def _add_context(self, file: ExtensionFileSummary) -> None:
-        rows = [(name, "Injected into workspace context") for name in file.contexts]
-        self._add_section("Context", rows)
-
-    def _add_hooks(self, file: ExtensionFileSummary) -> None:
-        rows = [(name, "Lifecycle hook") for name in file.hooks]
-        self._add_section("Hooks", rows)
-
-    def _add_ui(self, file: ExtensionFileSummary) -> None:
-        rows = [(badge.name, "Status badge") for badge in file.badges]
-        rows += [(panel.name, f"Panel: {panel.title}") for panel in file.panels]
-        self._add_section("UI Contributions", rows)
-
-    def _add_section(
-        self,
-        heading: str,
-        rows: list[tuple[str, str]],
-        *,
-        tone: str = "",
-        heading_tone: str = "",
-    ) -> None:
-        if not rows:
-            return
-        label = QLabel(heading)
-        label.setStyleSheet(_heading_style(heading_tone or tone))
-        self._layout.addWidget(label)
-        for title, subtitle in rows:
-            self._add_row(title, subtitle, tone=tone)
-
-    def _add_row(self, title: str, subtitle: str, *, tone: str = "") -> None:
-        p = palette()
-        card = _make_card()
-        border = "#5f252d" if tone == "danger" else p["BORDER"]
-        card.setStyleSheet(
-            f"QFrame#extensionCard {{ background-color:{p['BG3']};"
-            f"border:1px solid {border}; border-radius:8px; }}"
-        )
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(10, 8, 10, 8)
-        layout.setSpacing(3)
-
-        title_label = QLabel(title)
-        title_label.setWordWrap(True)
-        title_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        title_label.setStyleSheet(f"color:{p['TEXT']}; font-weight:600;")
-        layout.addWidget(title_label)
-
-        if subtitle:
-            sub_label = QLabel(subtitle)
-            sub_label.setWordWrap(True)
-            sub_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-            sub_label.setStyleSheet(f"color:{p['TEXT_DIM']}; font-size:{meta_font_pt()}px;")
-            layout.addWidget(sub_label)
-
-        self._layout.addWidget(card)
+        root.addWidget(label)
 
 
-class _EmptyTab(QWidget):
+class _EmptyList(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         p = palette()
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 12, 0, 0)
+        layout.setContentsMargins(10, 10, 10, 10)
         label = QLabel("No extension files found.")
         label.setStyleSheet(f"color:{p['TEXT_DIM']};")
         layout.addWidget(label)
         layout.addStretch()
 
 
-class _ApiReferenceTab(QWidget):
+class _PlaceholderPane(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        root = QVBoxLayout(self)
-        root.setContentsMargins(0, 10, 0, 0)
-        root.setSpacing(0)
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        body = QWidget()
-        layout = QVBoxLayout(body)
+        p = palette()
+        layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
-        scroll.setWidget(body)
-        root.addWidget(scroll, 1)
+        layout.addStretch()
+        label = QLabel("No extension selected.")
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setStyleSheet(f"color:{p['TEXT_DIM']};")
+        layout.addWidget(label)
+        layout.addStretch()
+
+
+class _ApiReferencePane(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(14)
+
+        title = QLabel("API Reference")
+        title.setStyleSheet(_pane_title_style())
+        layout.addWidget(title)
 
         intro = QLabel(
             "Extensions return structured data. aichs owns the widgets, layout, "
@@ -324,6 +409,45 @@ class _ApiReferenceTab(QWidget):
             ("ctx.cwd", "Current workspace path."),
             ("ctx.model", "Currently selected model id."),
             ("ctx.history", "Current conversation history visible to the chat panel."),
+            ("ctx.extension_id", "Safe id derived from the extension filename."),
+            ("ctx.storage.load_config(scope)", "Load project/global extension JSON config."),
+            ("ctx.storage.save_config(data, scope)", "Save project/global extension JSON config."),
+            ("ctx.storage.load_state(name)", "Load project-scoped extension JSON state."),
+            ("ctx.storage.save_state(data, name)", "Save project-scoped extension JSON state."),
+            ("ctx.processes", "Managed process API when available to UI providers."),
+        ])
+        _add_api_section(layout, "Tool Context", [
+            ("ctx.cwd", "Current workspace path."),
+            ("ctx.on_line", "Optional callback for streaming command-like output."),
+            ("ctx.cancel", "Cancellation event."),
+            ("ctx.is_cancelled()", "Convenience cancellation check."),
+            ("ctx.extension_id", "Safe id derived from the extension filename."),
+            ("ctx.storage.load_config(scope)", "Load project/global extension JSON config."),
+            ("ctx.storage.save_config(data, scope)", "Save project/global extension JSON config."),
+            ("ctx.storage.load_state(name)", "Load project-scoped extension JSON state."),
+            ("ctx.storage.save_state(data, name)", "Save project-scoped extension JSON state."),
+        ])
+        _add_api_section(layout, "Executable Command Context", [
+            ("ctx.cwd", "Current workspace path."),
+            ("ctx.model", "Selected model id."),
+            ("ctx.history", "Current visible conversation history."),
+            ("ctx.conversation_id", "Current conversation id, when available."),
+            ("ctx.command", "Command name being executed."),
+            ("ctx.extension_id", "Safe id derived from the extension filename."),
+            ("ctx.storage.load_config(scope)", "Load project/global extension JSON config."),
+            ("ctx.storage.save_config(data, scope)", "Save project/global extension JSON config."),
+            ("ctx.storage.load_state(name)", "Load project conversation-scoped JSON state."),
+            ("ctx.storage.save_state(data, name)", "Save project conversation-scoped JSON state."),
+            ("ctx.runtime.notice(text)", "Show a center notice."),
+            ("ctx.runtime.send(text)", "Send now, or queue if a run is active."),
+            ("ctx.runtime.enqueue(text)", "Queue a normal chat message."),
+            ("ctx.runtime.compact(force=True)", "Request normal compaction."),
+            ("ctx.runtime.continue_after_compact(prompt, force=True)", "Queue a synthetic resume after compaction."),
+            ("ctx.runtime.processes.start(name, command, ...)", "Start a managed long-running process."),
+            ("ctx.runtime.processes.status(name)", "Inspect managed process state."),
+            ("ctx.runtime.processes.tail(name, lines)", "Read recent process output."),
+            ("ctx.runtime.processes.write(name, text)", "Write to process stdin when enabled."),
+            ("ctx.runtime.processes.stop(name)", "Stop a managed process."),
         ])
         _add_api_section(layout, "Extension Metadata", [
             (
@@ -339,6 +463,14 @@ class _ApiReferenceTab(QWidget):
                 "Alternative static fallback.",
             ),
             ("module docstring", "Last-resort static fallback."),
+        ])
+        _add_api_section(layout, "Runtime Hook Directives", [
+            ("show_notice", "Show a notice in the active chat."),
+            ("enqueue_message", "Queue a normal user message."),
+            ("compact_now", "Request app-owned compaction at a safe boundary."),
+            ("compact_and_resume", "Compact and queue a synthetic continuation prompt."),
+            ("ledger", "Optional directive flag requiring continuation-ledger validation."),
+            ("ctx.process", "Process event payload for process_started and process_exited hooks."),
         ])
         _add_api_section(layout, "Status Badge Schema", [
             (
@@ -374,11 +506,15 @@ class _ApiReferenceTab(QWidget):
         ])
         _add_api_section(layout, "Action Schema", [
             ("label", "Button text. Defaults to the action type."),
-            ("type", "Supported: open_file, copy, refresh_panel, send_message."),
+            ("type", "Supported: open_file, copy, refresh_panel, send_message, run_extension_command."),
             ("path", "For open_file: workspace-relative path."),
             ("text", "For copy or send_message."),
+            ("command", "For run_extension_command: executable extension command name."),
+            ("args", "For run_extension_command: command arguments."),
+            ("refresh", "If true, refreshes the panel after the action runs."),
             ("refresh_panel", "Re-runs the provider and redraws the current panel."),
             ("send_message", "Sends or queues text like a normal user message."),
+            ("run_extension_command", "Runs an executable extension command without adding a chat message."),
         ])
         _add_api_section(layout, "String Shortcuts", [
             ("panel returns a string", "Rendered as body text."),
@@ -396,35 +532,47 @@ class _ApiReferenceTab(QWidget):
 
 
 def _add_api_section(layout: QVBoxLayout, heading: str, rows: list[tuple[str, str]]) -> None:
+    _add_detail_section(layout, heading, rows)
+
+
+def _add_detail_section(
+    layout: QVBoxLayout,
+    heading: str,
+    rows: list[tuple[str, str]],
+    *,
+    tone: str = "",
+) -> None:
+    if not rows:
+        return
     label = QLabel(heading)
-    label.setStyleSheet(_heading_style())
+    label.setStyleSheet(_heading_style(tone))
     layout.addWidget(label)
 
-    p = palette()
-    card = _make_card()
-    card.setStyleSheet(
-        f"QFrame#extensionCard {{ background-color:{p['BG3']};"
-        f"border:1px solid {p['BORDER']}; border-radius:8px; }}"
-    )
-    grid = QGridLayout(card)
-    grid.setContentsMargins(10, 8, 10, 8)
-    grid.setHorizontalSpacing(16)
-    grid.setVerticalSpacing(6)
+    table = QFrame()
+    table.setObjectName("extensionDetailTable")
+    table.setStyleSheet(_detail_table_style(tone))
+    grid = QGridLayout(table)
+    grid.setContentsMargins(0, 0, 0, 0)
+    grid.setHorizontalSpacing(18)
+    grid.setVerticalSpacing(0)
 
     for row, (name, description) in enumerate(rows):
         name_label = QLabel(name)
         name_label.setWordWrap(True)
         name_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        name_label.setStyleSheet(f"color:{p['TEXT']}; font-weight:600;")
+        name_label.setStyleSheet(_detail_name_style(tone))
+        name_label.setContentsMargins(0, 8 if row else 0, 0, 8)
         grid.addWidget(name_label, row, 0, Qt.AlignmentFlag.AlignTop)
 
         desc_label = QLabel(description or "-")
         desc_label.setWordWrap(True)
         desc_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        desc_label.setStyleSheet(f"color:{p['TEXT_DIM']}; font-size:{meta_font_pt()}px;")
+        desc_label.setStyleSheet(_detail_value_style(tone))
+        desc_label.setContentsMargins(0, 8 if row else 0, 0, 8)
         grid.addWidget(desc_label, row, 1)
 
-    layout.addWidget(card)
+    grid.setColumnStretch(1, 1)
+    layout.addWidget(table)
 
 
 def _summary_text(overview: ExtensionOverview) -> str:
@@ -439,10 +587,49 @@ def _summary_text(overview: ExtensionOverview) -> str:
     return " · ".join(parts)
 
 
-def _make_card() -> QFrame:
-    card = QFrame()
-    card.setObjectName("extensionCard")
-    return card
+def _clear_layout(layout: QVBoxLayout) -> None:
+    while layout.count():
+        item = layout.takeAt(0)
+        widget = item.widget()
+        if widget is not None:
+            widget.deleteLater()
+
+
+def _find_file(
+    overview: ExtensionOverview,
+    path: str,
+) -> ExtensionFileSummary | None:
+    return next((file for file in overview.files if file.path == path), None)
+
+
+def _extension_name(file: ExtensionFileSummary) -> str:
+    return Path(file.path).name
+
+
+def _list_status_text(file: ExtensionFileSummary) -> str:
+    if file.errors:
+        return f"{file.status} · {len(file.errors)} error(s)"
+    return file.status
+
+
+def _list_subtitle(file: ExtensionFileSummary) -> str:
+    counts = [
+        (len(file.tools), "tool"),
+        (len(file.commands), "command"),
+        (len(file.contexts), "context"),
+        (len(file.hooks), "hook"),
+        (len(file.badges) + len(file.panels), "UI"),
+    ]
+    parts = [
+        f"{count} {label}{'' if count == 1 or label == 'UI' else 's'}"
+        for count, label in counts
+        if count
+    ]
+    if not parts:
+        parts.append("No registered contributions")
+    if file.description:
+        parts.append(file.description)
+    return " · ".join(parts)
 
 
 def _tab_title(file: ExtensionFileSummary) -> str:
@@ -450,12 +637,6 @@ def _tab_title(file: ExtensionFileSummary) -> str:
     if file.status == "Disabled":
         return f"Disabled · {name}"
     return f"! {name}" if file.errors else name
-
-
-def _apply_tab_status(tabs: QTabWidget, index: int, file: ExtensionFileSummary) -> None:
-    bar = tabs.tabBar()
-    bar.setTabToolTip(index, _tab_tooltip(file))
-    bar.setTabTextColor(index, QColor(_tab_text_color(file)))
 
 
 def _tab_tooltip(file: ExtensionFileSummary) -> str:
@@ -492,13 +673,109 @@ def _heading_style(tone: str = "") -> str:
     )
 
 
+def _pane_title_style() -> str:
+    p = palette()
+    return f"font-size:{chat_font_pt() + 4}px; font-weight:650; color:{p['TEXT']};"
+
+
 def _intro_style() -> str:
     p = palette()
     return (
-        f"color:{p['TEXT']}; background-color:{p['BG3']};"
-        f"border:1px solid {p['BORDER']}; border-radius:8px;"
-        "padding:10px;"
+        f"color:{p['TEXT']}; background:transparent;"
+        f"border-left:2px solid {p['BORDER']}; padding:0 0 0 10px;"
     )
+
+
+def _list_scroll_style() -> str:
+    p = palette()
+    return (
+        f"QScrollArea {{ background:{p['BG2']}; border-right:1px solid {p['BORDER_SUBTLE']}; }}"
+    )
+
+
+def _detail_scroll_style() -> str:
+    p = palette()
+    return (
+        f"QScrollArea {{ background:{p['BG2']}; border:none; }}"
+        f"QScrollArea QWidget {{ background:{p['BG2']}; }}"
+    )
+
+
+def _list_row_style(selected: bool, tone: str) -> str:
+    p = palette()
+    bg = p["SELECTION"] if selected else p["BG2"]
+    hover = p["SELECTION"] if selected else p["BG3"]
+    border = {
+        "danger": "#5f252d",
+        "disabled": p["BORDER_SUBTLE"],
+    }.get(tone, p["BORDER_SUBTLE"])
+    return (
+        f"QFrame#extensionListRow {{ background:{bg};"
+        f"border-bottom:1px solid {border}; border-radius:0; }}"
+        f"QFrame#extensionListRow:hover {{ background:{hover}; }}"
+    )
+
+
+def _list_name_style() -> str:
+    p = palette()
+    return f"color:{p['TEXT']}; font-weight:600;"
+
+
+def _list_meta_style(tone: str) -> str:
+    p = palette()
+    color = {
+        "danger": "#f87171",
+        "disabled": p["TEXT_DIM"],
+        "success": p["SUCCESS"],
+    }.get(tone, p["TEXT_DIM"])
+    return f"color:{color}; font-size:{meta_font_pt()}px; font-weight:600;"
+
+
+def _list_path_style() -> str:
+    p = palette()
+    return f"color:{p['TEXT_DIM']}; font-size:{meta_font_pt()}px;"
+
+
+def _secondary_button_style(*, compact: bool = False) -> str:
+    p = palette()
+    pad = "4px 9px" if compact else "5px 12px"
+    fs = meta_font_pt() if compact else max(meta_font_pt(), 11)
+    return (
+        f"QPushButton {{ background:{p['BG3']}; color:{p['TEXT']};"
+        f"border:1px solid {p['BORDER']}; border-radius:6px;"
+        f"padding:{pad}; font-size:{fs}px; font-weight:500; }}"
+        f"QPushButton:hover {{ background:{p['BORDER']}; }}"
+        f"QPushButton:pressed {{ background:{p['BG2']}; }}"
+    )
+
+
+def _header_style() -> str:
+    p = palette()
+    return (
+        f"QFrame#extensionHeader {{ background:transparent;"
+        f"border-bottom:1px solid {p['BORDER_SUBTLE']}; border-radius:0; }}"
+    )
+
+
+def _detail_table_style(tone: str = "") -> str:
+    p = palette()
+    border = "#5f252d" if tone == "danger" else p["BORDER_SUBTLE"]
+    return (
+        f"QFrame#extensionDetailTable {{ background:transparent;"
+        f"border-top:1px solid {border}; border-radius:0; }}"
+    )
+
+
+def _detail_name_style(tone: str = "") -> str:
+    p = palette()
+    color = "#f87171" if tone == "danger" else p["TEXT"]
+    return f"color:{color}; font-weight:600;"
+
+
+def _detail_value_style(tone: str = "") -> str:
+    p = palette()
+    color = "#fca5a5" if tone == "danger" else p["TEXT_DIM"]
+    return f"color:{color}; font-size:{meta_font_pt()}px;"
 
 
 def _status_label_style(tone: str) -> str:

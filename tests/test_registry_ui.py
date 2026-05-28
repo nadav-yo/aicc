@@ -5,6 +5,7 @@ from services.tool_registry import (
     extension_status_badges,
     load_extensions,
 )
+from ui.widgets.extension_panel_dialog import _is_supported_action
 from tests.conftest import write_extension
 
 
@@ -51,3 +52,7 @@ def test_panel_failure_recorded(workspace):
     assert title == "Bad"
     assert "failed" in data["body"].lower() or "Panel" in data["body"]
     assert errors
+
+
+def test_run_extension_command_panel_action_supported():
+    assert _is_supported_action({"type": "run_extension_command"})

@@ -150,6 +150,7 @@ class MainWindow(QMainWindow):
             "outer_sizes": self._outer.sizes(),
             "inner_sizes": self._inner.sizes(),
         })
+        self._chat.stop_managed_processes()
         super().closeEvent(event)
 
     def _apply_appearance(self):
