@@ -27,10 +27,11 @@ _HEADING_RE = re.compile(r"^\s*#\s+(.+?)\s*$", re.MULTILINE)
 def docs_dir() -> Path:
     candidates = [
         Path(__file__).resolve().parents[2] / "docs",
-        Path(getattr(sys, "_MEIPASS", "")) / "docs",
         Path(sys.executable).resolve().parent / "docs",
         Path(sys.prefix) / "share" / "aichs" / "docs",
     ]
+    if hasattr(sys, "_MEIPASS"):
+        candidates.insert(1, Path(sys._MEIPASS) / "docs")
     for candidate in candidates:
         if candidate.is_dir():
             return candidate
