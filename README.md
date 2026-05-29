@@ -1,8 +1,10 @@
 # aichs
 
-Local desktop agent workspace for software projects. aichs combines chat,
-approval-gated tools, git context, file references, conversation history,
-compaction, and project-specific extensions in a small PyQt app.
+**aichs is a minimal visual harness for agentic coding.**
+Adapt it to your workflows, not the other way around.
+
+Open a repository, chat with a model, and let the agent work with your code
+through approved tools, git context, file references, skills, and extensions.
 
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)
 ![Tests](https://github.com/nadav-yo/aichs/actions/workflows/tests.yml/badge.svg)
@@ -15,52 +17,23 @@ run shell commands.
 
 ## Install From PyPI
 
-For normal use, install the published command with `pipx`:
+Install the published command with `pipx`:
 
 ```bash
 pipx install aichs
 ```
 
-Then start it from the repository you want to work in:
+Start it from a repository:
 
 ```bash
 cd /path/to/your/repo
 aichs
 ```
 
-On Windows, that looks like:
-
-```powershell
-cd C:\path\to\your\repo
-aichs
-```
-
-You can also pass the workspace explicitly:
+Or pass the workspace explicitly:
 
 ```bash
 aichs /path/to/your/repo
-aichs --workspace /path/to/your/repo
-```
-
-If you use `pip` instead of `pipx`, install with:
-
-```bash
-python -m pip install --user aichs
-```
-
-On Windows, make sure Python's user script directory is on `PATH`, for example
-`C:\Users\<you>\AppData\Roaming\Python\Python311\Scripts`.
-
-To upgrade an existing install:
-
-```bash
-pipx upgrade aichs
-```
-
-or, for a `pip --user` install:
-
-```bash
-python -m pip install --user --upgrade aichs
 ```
 
 ## Run
@@ -73,31 +46,27 @@ Conversation history is stored in user data, not in your repository. Each
 workspace gets a stable entry in `~/.aichs/workspaces.json` and its chats are
 saved under `~/.aichs/<workspace_id>/conversations/`.
 
-## Install From Source
-
-```bash
-git clone https://github.com/nadav-yo/aichs
-cd aichs
-python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements-dev.txt
-python main.py
-```
-
 API keys can be configured in **Settings -> Models** or through environment
 variables. Requires Python 3.11+.
 
-## Features
+## What It Does
 
-- Chat with streaming Markdown, vision-capable models, file mentions, edit/resend, and queued messages
-- Approval-gated tools for reading, editing, searching, shell commands, git context, and extension tools
-- Workspace browser with file tree, syntax-highlighted tabs, git status, and diffs
-- Context usage view with auto-compaction and compacted conversation summaries
-- Skills, slash commands, command palette, pinned/exported/searchable conversations
-- Project and user extensions for custom tools, prompt context, hooks, badges, and panels
+Open a workspace folder, pick a model, and work in one window:
 
-Tool paths are scoped to the workspace. Shell commands and extensions run as the
-current user; only enable extensions you trust.
+- **Agentic coding**: ask the agent to inspect files, explain code, search the repo, make edits, and run approved shell commands
+- **Approval-gated tools**: read, edit, search, git context, shell commands, and extension tools with workspace-scoped paths
+- **Coding workspace**: file tree, syntax-highlighted tabs, git status, diffs, file references, and conversation history
+- **Context management**: usage view, auto-compaction, compacted summaries, and decision memory for long sessions
+- **Customization**: slash-command skills, command palette, project/user extensions, custom tools, hooks, badges, and panels
+- **Conversation flow**: streaming Markdown, vision-capable models, file mentions, edit/resend, queued messages, pinned chats, search, and export
+
+Shell commands and extensions run as the current user; only enable extensions
+you trust.
+
+## Contributing
+
+Contributor setup, source installs, tests, packaging, and release notes live in
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Documentation
 
@@ -109,53 +78,33 @@ current user; only enable extensions you trust.
 | Slash-command skills | [docs/skills.md](docs/skills.md) |
 | Compaction and decision memory | [docs/compact.md](docs/compact.md) |
 
-## Development
+## FAQ
 
-Run the full suite from the repository root:
+### What does aichs stand for?
 
-```bash
-pytest -q --cov-fail-under=90
-```
+**AI Choding Harness Studio.** It is also a play on Hebrew "ichs" (`איכס`),
+from Arabic `إخسا`, roughly "yuck" or "ew." The name is a little cursed on
+purpose.
 
-Single-file test runs are useful while iterating, but they do not represent the
-real coverage number because coverage is measured across the configured package
-set. For a quick local check without coverage:
+### Why use aichs when Cursor, Claude Code, Codex, and other agent tools exist?
 
-```bash
-pytest --no-cov
-```
+You may not need it. Those tools are wonderful. aichs is for when you want a
+small, local, hackable agentic coding workspace that is shaped around your own
+habits.
 
-Project agent instructions live in [AGENTS.md](AGENTS.md).
+### Is aichs trying to replace my IDE?
 
-## Packaging
+No. It is a companion workbench: one window for the agent conversation, repo
+context, files, diffs, approvals, custom prompts, and extension tools.
 
-For local development, use `python main.py`. For a distributable desktop build,
-use PyInstaller:
+### Can I contribute something?
 
-```bash
-python tools/build_package.py
-```
+Very much. Small fixes, weird ideas, extensions, docs, and sharp opinions are
+all welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Outputs are written under `dist/`:
+### Does the S feel forced?
 
-| OS | Output |
-|---|---|
-| Windows | `dist/aichs/aichs.exe` |
-| macOS | `dist/aichs.app` and `dist/aichs/` |
-| Linux | `dist/aichs/aichs` |
-
-Build on each target OS for that OS; PyInstaller is not a cross-compiler.
-
-## Publishing
-
-To publish a release, run the **release** GitHub Actions workflow from the
-branch you want to release with a version such as `0.2.1`. It runs the test
-suite, updates `pyproject.toml`, commits `Release version 0.2.1`, tags that
-commit as `v0.2.1`, and pushes the commit and tag.
-
-The **publish** workflow only runs for `v*` tags. It checks out the tag, builds
-the distributions, verifies the filenames match the tag version, and uploads to
-PyPI with Trusted Publishing.
+Yes. It is.
 
 ## License
 

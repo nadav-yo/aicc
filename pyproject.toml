@@ -5,14 +5,14 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "aichs"
 version = "0.2.0"
-description = "A minimal desktop agent studio for local repositories."
+description = "A minimal visual harness for agentic coding."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 authors = [
-  { name = "AI Choding Harness Studio" },
+  { name = "Nadav Yo" },
 ]
-keywords = ["ai", "agent", "desktop", "pyqt"]
+keywords = ["ai", "agent", "coding", "desktop", "pyqt"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Environment :: Win32 (MS Windows)",
